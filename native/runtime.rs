@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz5";
+pub const VERSION: &str = "1.5.2-hz6";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -357,33 +357,102 @@ pub fn on_message(channel: &str, data: &[u8]) {
 }
 
 thread_local! {
-    static ASSETS_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The original's files are in the render pass's hands.
+    static ASSETS_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ASSETS_TRIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The first run's last word, said once.
+    static SETUP_SAID: std::cell::RefCell<Option<super::shooting_star_setup::Status>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The original's shaders, textures and film tables, from the content mod's
-/// `data/shooting_star_demo/` (the installer took them from the player's copy
-/// of the original), handed to the render pass once.
-fn load_assets(game: &mut super::Game<'_>) {
+/// The game folder (`horizon-mods/` is in it) and the mod's own data folder.
+fn folders(game: &super::Game<'_>) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let data = game.native_data_dir(ID);
+    let game_dir = data.parent()?.parent()?.parent()?.to_path_buf();
+    Some((game_dir, data))
+}
+
+/// The original's files, from the content mod (the game's resources, or its
+/// folder when the first run has only just made it), to the render pass.
+fn read_assets(game: &super::Game<'_>, game_dir: Option<&std::path::Path>) -> usize {
     use horizon_client_render::gfx::native_render::shooting_star_fxframe as fx;
-    if ASSETS_READ.with(|r| r.replace(true)) {
-        return;
-    }
-    let mut missing = Vec::new();
+    let mut missing = 0;
     for path in fx::ASSET_FILES {
-        match game.native_data(&format!("data/shooting_star_demo/{path}")) {
+        let bytes = game.native_data(&format!("data/shooting_star_demo/{path}")).or_else(|| {
+            let dir = super::shooting_star_setup::content_dir(game_dir?);
+            std::fs::read(dir.join("data").join("shooting_star_demo").join(path)).ok()
+        });
+        match bytes {
             Some(bytes) => fx::provide(path, bytes),
-            None => missing.push(*path),
+            None => missing += 1,
         }
     }
-    if missing.is_empty() {
-        log::info!("[{ID}] the original's {} files are read", fx::ASSET_FILES.len());
-    } else {
-        log::warn!("[{ID}] {} of the original's files are missing (first: {}): run the installer again", missing.len(), missing[0]);
-        game.native_client_action_bar(
-            crate::text::Text::literal("The Shooting Star: the original's files are missing, run install again".to_owned()),
-            true,
-        );
+    missing
+}
+
+/// Once a tick: the original's files read, or the first run started and
+/// followed (it downloads the original and builds the content mod).
+fn load_assets(game: &mut super::Game<'_>) {
+    use super::shooting_star_setup as setup;
+    let dirs = folders(game);
+    if !ASSETS_TRIED.with(|t| t.replace(true)) {
+        let missing = read_assets(game, dirs.as_ref().map(|d| d.0.as_path()));
+        // The shaders and textures make the light; the films are a part of it.
+        let core = horizon_client_render::gfx::native_render::shooting_star_fxframe::asset("fx/composite.fsh").is_some();
+        ASSETS_OK.with(|ok| ok.set(core));
+        if let Some((game_dir, data)) = &dirs {
+            if !setup::ready(game_dir) {
+                log::info!("[{ID}] the content mod is not built yet: the first run starts");
+                setup::start(game_dir.clone(), data.join("original"), false);
+            } else {
+                if setup::turn_on(game_dir).unwrap_or(false) {
+                    say(game, "The Shooting Star: its content mod was off and is turned on again. Restart the game.");
+                }
+                if !setup::films_ready(game_dir) {
+                    setup::start(game_dir.clone(), data.join("original"), true);
+                }
+            }
+        }
+        if missing == 0 {
+            log::info!("[{ID}] the original's {} files are read", horizon_client_render::gfx::native_render::shooting_star_fxframe::ASSET_FILES.len());
+        }
     }
+    let status = setup::status();
+    let said = SETUP_SAID.with(|s| s.borrow().clone());
+    if said.as_ref() == Some(&status) || status == setup::Status::Idle {
+        return;
+    }
+    match &status {
+        setup::Status::Working(what) => {
+            if TICKS.with(std::cell::Cell::get) % 40 == 0 {
+                game.native_client_action_bar(crate::text::Text::literal(format!("✦ The Shooting Star: {what}…")), false);
+            }
+            return;
+        }
+        // The last word waits for a world, where it can be read.
+        setup::Status::Done { .. } | setup::Status::Failed(_) if game.native_player().is_none() => return,
+        setup::Status::Done { films } => {
+            let missing = read_assets(game, dirs.as_ref().map(|d| d.0.as_path()));
+            ASSETS_OK.with(|ok| ok.set(missing == 0 || *films || horizon_client_render::gfx::native_render::shooting_star_fxframe::asset("fx/composite.fsh").is_some()));
+            let films_note = if *films { "" } else { " The films need Java 25 (Horizon Launcher installs it with any 26.x instance)." };
+            say(game, &format!("✦ The Shooting Star is ready: the light works now; restart the game for the Stellar Remote, its blocks and sounds.{films_note}"));
+        }
+        setup::Status::Failed(error) => {
+            say(game, &format!("✦ The Shooting Star could not get the original's files: {error}. It tries again next start."));
+        }
+        setup::Status::Idle => {}
+    }
+    SETUP_SAID.with(|s| *s.borrow_mut() = Some(status));
+}
+
+/// A line in the chat, for this player only.
+fn say(game: &mut super::Game<'_>, text: &str) {
+    game.native_client_action_bar(crate::text::Text::literal(text.to_owned()), false);
+    game.native_chat(text);
+}
+
+/// The light can be drawn: the original's shaders are in.
+pub fn assets_ok() -> bool {
+    ASSETS_OK.with(std::cell::Cell::get)
 }
 
 /// The window's tick (`tick`): the selection reaches the server, the
@@ -1149,7 +1218,11 @@ pub fn frame_tick(game: &super::Game<'_>, partial: f32, camera: [f64; 3], primit
             .collect()
     });
     let time = (TICKS.with(std::cell::Cell::get) as f32 + partial) / 20.0;
-    let frame = super::shooting_star_visuals::frame(&views, camera, min_y, min_y + height - 1, time);
+    let mut frame = super::shooting_star_visuals::frame(&views, camera, min_y, min_y + height - 1, time);
+    if !assets_ok() {
+        // Until the first run has the original's shaders, nothing to draw them with.
+        frame.passes.clear();
+    }
     let drew = !frame.passes.is_empty();
     horizon_client_render::gfx::native_render::shooting_star_fxframe::publish(frame);
     // Tesseract and Gravitia keep their marks until their passes are ported.

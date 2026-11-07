@@ -66,7 +66,7 @@ New-Item -ItemType Directory -Force -Path $Work | Out-Null
 try {
   # This checkout, or the repository downloaded.
   $Src = $null
-  if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'files.tsv'))) {
+  if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot '..\native\data\files.tsv'))) {
     $Src = Split-Path -Parent $PSScriptRoot
   } else {
     Say "Downloading $Repo ($Ref)"
@@ -102,12 +102,12 @@ try {
   # The content mod: the port's own files, then the original's.
   Say 'Building the content mod'
   $Out = Join-Path $Work 'content'
-  Copy-Item (Join-Path $Src 'content') $Out -Recurse
+  Copy-Item (Join-Path $Src 'native\data\content') $Out -Recurse
   $opened = @{}
   foreach ($version in $Inner.Keys) { $opened[$version] = [IO.Compression.ZipFile]::OpenRead($Inner[$version]) }
   $count = 0
   try {
-    foreach ($line in Get-Content (Join-Path $Src 'install\files.tsv')) {
+    foreach ($line in Get-Content (Join-Path $Src 'native\data\files.tsv')) {
       if (-not $line -or $line.StartsWith('#')) { continue }
       $dest, $version, $from = $line.Split("`t")
       $entry = $opened[$version].GetEntry($from)
@@ -150,9 +150,9 @@ try {
   if ($Java) {
     Say "Recording the films' cameras (Java: $Java)"
     $films = Join-Path $Out "data\$ModId\films"
-    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'tools\films\classes'), $Inner['1.5.2']) Films $films *> (Join-Path $Work 'films.log')
+    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'native\data\films-tool'), $Inner['1.5.2']) Films $films *> (Join-Path $Work 'films.log')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the films' tables could not be made" }
-    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'tools\films\classes'), $Inner['1.4.4']) Films $films --tesseract *> (Join-Path $Work 'films.log')
+    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'native\data\films-tool'), $Inner['1.4.4']) Films $films --tesseract *> (Join-Path $Work 'films.log')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the Tesseract's sky table could not be made" }
   } else {
     Say 'No Java 25 found: the films (the cutscenes in space) stay off. Install Horizon Launcher, or Java 25, and run this again.'

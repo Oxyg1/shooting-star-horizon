@@ -57,7 +57,7 @@ fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/shooting-star.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 SRC=""
-if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/files.tsv" ]; then
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/../native/data/files.tsv" ]; then
   SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 else
   say "Downloading $REPO ($REF)"
@@ -83,14 +83,14 @@ unzip -p "$CACHE/the-shooting-star-demo-1.4.4-fabric.jar" "$JAR_144_INNER" > "$W
 # The content mod: the port's own files, then the original's.
 say "Building the content mod"
 OUT="$WORK/content"
-cp -R "$SRC/content" "$OUT"
+cp -R "$SRC/native/data/content" "$OUT"
 count=0
 while IFS=$'\t' read -r dest jar from; do
   case "$dest" in ''|'#'*) continue ;; esac
   mkdir -p "$OUT/$(dirname "$dest")"
   unzip -p "$WORK/${jar//./}.jar" "$from" > "$OUT/$dest" || die "$from is missing from the $jar jar"
   count=$((count + 1))
-done < "$SRC/install/files.tsv"
+done < "$SRC/native/data/files.tsv"
 say "  $count of the original's files"
 
 # The films' camera tables: the original's path classes, run once (Java 25, as Minecraft 26.3's).
@@ -113,9 +113,9 @@ fi
 find_java
 if [ -n "$JAVA" ]; then
   say "Recording the films' cameras (Java: $JAVA)"
-  "$JAVA" -cp "$SRC/tools/films/classes:$WORK/152.jar" Films "$OUT/data/$MOD_ID/films" >/dev/null 2>"$WORK/films.log" \
+  "$JAVA" -cp "$SRC/native/data/films-tool:$WORK/152.jar" Films "$OUT/data/$MOD_ID/films" >/dev/null 2>"$WORK/films.log" \
     || { cat "$WORK/films.log" >&2; die "the films' tables could not be made"; }
-  "$JAVA" -cp "$SRC/tools/films/classes:$WORK/144.jar" Films "$OUT/data/$MOD_ID/films" --tesseract >/dev/null 2>"$WORK/films.log" \
+  "$JAVA" -cp "$SRC/native/data/films-tool:$WORK/144.jar" Films "$OUT/data/$MOD_ID/films" --tesseract >/dev/null 2>"$WORK/films.log" \
     || { cat "$WORK/films.log" >&2; die "the Tesseract's sky table could not be made"; }
 else
   say "No Java 25 found: the films (the cutscenes in space) stay off. Install Horizon Launcher, or Java 25, and run this again."

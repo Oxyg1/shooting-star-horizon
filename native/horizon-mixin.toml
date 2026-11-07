@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.5.0"
+version = "0.6.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -61,6 +61,14 @@ id = "tesseract"
 file = "crates/horizon-client/src/game/native_hooks.rs"
 name = "shooting_star_tesseract"
 source = "tesseract.rs"
+
+# The first run: the original's files fetched from CurseForge and made into
+# the content mod (this repository carries none of them).
+[[module]]
+id = "setup"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_setup"
+source = "setup.rs"
 
 # What a frame asks of the render pass: plain data both crates see.
 [[module]]

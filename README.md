@@ -50,47 +50,53 @@ Java-версии: проходы заклинания → блум → комп
 
 ## ✦ Установка
 
-Нужны **[Horizon Launcher](https://github.com/horizon-rust/horizon)** и игра, хотя бы раз запущенная.
-Установщик всё сделает сам:
+Нужен **[Horizon Launcher](https://github.com/horizon-rust/horizon)**. Всё делается в нём, без консоли:
 
-1. Скачает оригинальный мод с CurseForge, как это сделал бы ты.
-   В этом репозитории **нет ни одного файла оригинала**.
-2. Соберёт из него контент-мод (предмет, блоки, звуки, шейдеры, текстуры,
-   таблицы катсцен) и включит его.
-3. Поставит native-мод (код порта) с GitHub через лаунчер и пересоберёт игру.
-   Первая сборка занимает 20–30 минут, следующие — минуты.
+1. **Моды → Добавить нативный мод с GitHub** → вставь ссылку
+   ```
+   https://github.com/Oxyg1/shooting-star-horizon
+   ```
+   → **Добавить с GitHub**.
+2. **Собрать** (производительная сборка). Первая сборка занимает 20–30 минут, следующие — минуты.
+3. **Играть** → зайди в любой мир. Мод сам скачает оригинал с CurseForge
+   (≈145 МБ, прогресс виден над хотбаром), соберёт из него контент и
+   напишет в чат, когда закончит. Эффекты работают сразу.
+4. **Перезапусти игру** — появятся пульт **Stellar Remote**, блоки и звуки
+   (в креативе или `/give @s shooting_star_demo:stellar_remote`).
 
-**Windows** (PowerShell):
+Обновление — кнопка **Обновить** в том же списке модов.
+
+> В репозитории **нет ни одного файла оригинала**. Мод скачивает их у тебя
+> на компьютере с CurseForge и сверяет контрольные суммы, как если бы ты
+> скачал мод сам.
+
+<details>
+<summary><b>Установка одной командой (без окна лаунчера)</b></summary>
+
+Делает то же самое, включая сборку. Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/Oxyg1/shooting-star-horizon/main/install/install.ps1 | iex
 ```
 
-**Linux / macOS**:
+Linux / macOS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Oxyg1/shooting-star-horizon/main/install/install.sh | bash
 ```
 
-Потом: Horizon Launcher → **Play** → в креативе найди **Stellar Remote**
-(или `/give @s shooting_star_demo:stellar_remote`).
-
-<details>
-<summary><b>Вручную, через окно лаунчера</b></summary>
-
-1. Склонируй или скачай репозиторий.
-2. Запусти установщик с ключом «только контент»:
-   `install\install.ps1 -ContentOnly` (Windows) или `install/install.sh --content-only`.
-3. Horizon Launcher → **Mods** → **Add from GitHub** →
-   `https://github.com/Oxyg1/shooting-star-horizon` → собрать.
-
 </details>
 
 <details>
-<summary><b>Обновление и удаление</b></summary>
+<summary><b>Если CurseForge недоступен или катсцен нет</b></summary>
 
-* Обновить: запусти ту же команду установки ещё раз (или `horizon-launcher mods update-github`).
-* Удалить: `horizon-launcher mods remove shooting_star`, затем удали папку
+* **CurseForge недоступен:** задай переменную `SHOOTING_STAR_MIRROR` — адрес
+  папки с теми же двумя jar. Мод проверит их по SHA-256. Для прокси
+  используется `HTTPS_PROXY`.
+* **Катсцен нет:** для их таблиц нужна Java 25. Она появляется вместе с
+  любой версией 26.x в Horizon Launcher или Minecraft Launcher. После её
+  установки мод сделает таблицы при следующем запуске.
+* Удаление: `horizon-launcher mods remove shooting_star`, затем папка
   `horizon-mods/shooting_star_demo` в папке игры (`%APPDATA%\horizon` или `~/.local/share/horizon`).
 
 </details>
@@ -123,7 +129,7 @@ curl -fsSL https://raw.githubusercontent.com/Oxyg1/shooting-star-horizon/main/in
 * **16-битный HDR между проходами** вместо 8-битного: свечение без полос.
 * **Полное разрешение эффектов до 1440p.** Оригинал понижал его уже выше 2,3 Мп.
 * **Gravitia не сработает случайно**: нужен второй клик за 10 секунд.
-* **Установка одной командой**, обновление через лаунчер.
+* **Установка одной кнопкой в лаунчере**: мод сам достаёт файлы оригинала при первом запуске.
 
 ## ✦ Как это устроено
 
@@ -137,8 +143,9 @@ native/       код порта на Rust (native-мод Horizon, horizon-mixins
   tesseract.rs  SS-05: квадрат, кубы, гиперкуб, двигатель, катсцена
   glsl.rs       GLSL оригинала → naga (раскладка uniform-ов, sampler2D, порядок функций)
   render.rs     цепочка на wgpu: кадр мира → проходы → блум → композит
-content/      свои файлы контент-мода (блоки и предмет для Horizon)
-install/      установщики и манифест файлов оригинала (files.tsv)
+  setup.rs      первый запуск: скачать оригинал, собрать контент-мод, снять катсцены
+  data/         свои файлы контент-мода, манифест файлов оригинала, рекордер катсцен
+install/      установщики одной командой
 tools/films/  снимает uniform-ы катсцен с классов оригинала (запускается установщиком)
 ```
 
@@ -164,8 +171,10 @@ Edition rewritten in Rust. The spells, their world-scale destruction and
 their space cutscenes are drawn by the original's own GLSL shaders. Horizon's
 naga compiles them in-game, and they run in a 16-bit HDR chain on wgpu.
 
-This repository holds only the port's code. The installer downloads the
-original from CurseForge and builds the content mod from it on your machine:
+This repository holds only the port's code. Add it in Horizon Launcher
+(Mods → Add a native mod from GitHub → `https://github.com/Oxyg1/shooting-star-horizon`),
+build, and enter a world: the mod downloads the original from CurseForge and
+builds its content mod on your machine; restart once. Or, from a terminal:
 
 ```powershell
 irm https://raw.githubusercontent.com/Oxyg1/shooting-star-horizon/main/install/install.ps1 | iex   # Windows
