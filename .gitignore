@@ -6,3 +6,5 @@ target/
 .DS_Store
 Thumbs.db
 /tools/films/classes/
+/tools/trailer/trailer-out/
+__pycache__/

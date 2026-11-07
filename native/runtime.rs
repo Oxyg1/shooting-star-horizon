@@ -13,14 +13,14 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz12";
+pub const VERSION: &str = "1.5.2-hz13";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
 pub const REMOTE_ID: &str = "shooting_star_demo:stellar_remote";
 
 /// The command usages the mod adds to the server's tree.
-pub const COMMANDS: &[&str] = &["tss info", "tss cast <skill:word>", "tss select <skill:word>", "tss next", "tss undo"];
+pub const COMMANDS: &[&str] = &["tss info", "tss cast <skill:word>", "tss select <skill:word>", "tss next", "tss undo", "tss trailer", "tss trailer stop"];
 
 /// The server to the window, and the window to the server.
 pub const CHANNEL: &str = "shooting_star:fx";
@@ -362,6 +362,9 @@ pub fn on_message(channel: &str, data: &[u8]) {
                         s.remove(0);
                     }
                     s.push(ClientSpell { start, age: 0, clock: 0.0, skip_age: None, pushed: false, boomed: None });
+                    if start.mine && TRAILER.with(std::cell::Cell::get) {
+                        MARKS.with(|m| m.borrow_mut().push(("cast", Some(start.skill), 0)));
+                    }
                 });
             }
         }
@@ -380,6 +383,14 @@ pub fn on_message(channel: &str, data: &[u8]) {
             DIRTY.with(|d| d.set(true));
             // A world joined: what it holds of Imaginary Space follows.
             VOID.with(|v| v.borrow_mut().clear());
+        }
+        sk::FX_TRAILER if data.len() >= 2 => {
+            let on = data[1] != 0;
+            TRAILER.with(|t| t.set(on));
+            if on {
+                CUTSCENES.with(|c| c.set(true));
+            }
+            MARKS.with(|m| m.borrow_mut().push((if on { "start" } else { "end" }, None, 0)));
         }
         sk::FX_VOID if data.len() > 5 => {
             let seed = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
@@ -496,6 +507,7 @@ pub fn client_tick(game: &mut super::Game<'_>) {
     load(game);
     play_ui_sounds(game);
     load_assets(game);
+    write_marks(game);
     let now = TICKS.with(|t| {
         t.set(t.get() + 1);
         t.get()
@@ -591,6 +603,57 @@ fn film_weight_at(spell: &ClientSpell, t: f32) -> Option<f32> {
 /// The film holds this spell's sound and screen (`inFilm`: over half its weight).
 fn film_on(spell: &ClientSpell) -> bool {
     film_weight_at(spell, spell.age as f32).is_some_and(|w| w > 0.5)
+}
+
+// ---- the trailer ----------------------------------------------------------------------------------------------
+//
+// `/tss trailer` runs a director on the server (`shooting_star_spells`): it
+// casts every skill in turn, each from a fresh spot. Here the window hides
+// its HUD, plays every film, and writes when each moment happened into
+// `shooting_star_trailer.jsonl` in the game folder, which the recording
+// script (`tools/trailer/record.ps1`) cuts the footage by.
+
+thread_local! {
+    static TRAILER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Moments to write: what, which skill, its age.
+    static MARKS: std::cell::RefCell<Vec<(&'static str, Option<Skill>, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The director is filming: no HUD, no hand.
+pub fn trailer() -> bool {
+    TRAILER.with(std::cell::Cell::get)
+}
+
+fn write_marks(game: &super::Game<'_>) {
+    if TRAILER.with(std::cell::Cell::get) {
+        // Every own spell's age, each half second, for the cuts to land on its ticks.
+        SPELLS.with(|s| {
+            for spell in s.borrow().iter().filter(|s| s.start.mine && s.age % 10 == 0) {
+                MARKS.with(|m| m.borrow_mut().push(("age", Some(spell.start.skill), spell.age)));
+            }
+        });
+    }
+    let marks = MARKS.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    if marks.is_empty() {
+        return;
+    }
+    let Some((game_dir, _)) = folders(game) else { return };
+    let path = game_dir.join("shooting_star_trailer.jsonl");
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let mut text = String::new();
+    for (event, skill, age) in &marks {
+        let skill = skill.map_or("", |s| s.id());
+        text.push_str(&format!("{{\"event\":\"{event}\",\"skill\":\"{skill}\",\"age\":{age},\"ms\":{ms}}}\n"));
+    }
+    use std::io::Write;
+    let fresh = marks.first().is_some_and(|(e, _, _)| *e == "start");
+    let file = std::fs::OpenOptions::new().create(true).write(true).append(!fresh).truncate(fresh).open(&path);
+    match file {
+        Ok(mut f) => {
+            let _ = f.write_all(text.as_bytes());
+        }
+        Err(error) => log::warn!("[{ID}] the trailer's marks could not be written: {error}"),
+    }
 }
 
 /// How much a film holds the camera this frame.
@@ -1844,6 +1907,17 @@ pub fn perform(game: &mut super::Game<'_>, command: &str) -> Result<String, ()> 
                 format!("Selected {}", skill.title())
             }
             None => format!("Usage: /tss select <{usage}>"),
+        },
+        Some("trailer") => match (words.next(), game.native_acting_player()) {
+            (Some("stop"), _) => {
+                super::shooting_star_spells::stop_trailer(game);
+                "The trailer is stopped".to_owned()
+            }
+            (_, Some(player)) => {
+                super::shooting_star_spells::start_trailer(game, &player);
+                "The trailer starts: every skill in turn, about four minutes. Leave the mouse alone.".to_owned()
+            }
+            (_, None) => "Only a player can film the trailer".to_owned(),
         },
         Some("next") => match game.native_acting_player() {
             Some(player) => {

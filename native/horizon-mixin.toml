@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.12.0"
+version = "0.13.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.

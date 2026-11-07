@@ -83,6 +83,7 @@ fn with_remote<R>(uuid: u128, f: impl FnOnce(&mut Remote) -> R) -> R {
 /// fresh start when another world opens.
 pub fn server_tick(game: &mut super::Game<'_>) {
     NOW.with(|n| n.set(n.get() + 1));
+    direct_trailer(game);
     let world = game.native_world_dir();
     let changed = WORLD.with(|w| {
         let mut w = w.borrow_mut();
@@ -190,6 +191,12 @@ pub fn use_remote(game: &mut super::Game<'_>) {
 
 /// Cast `skill` for `player`, tuned: the original's `Casting.cast`.
 pub fn cast(game: &mut super::Game<'_>, player: &super::NativeServerPlayer, skill: Skill, tune: Tuning) {
+    cast_at(game, player, skill, tune, None);
+}
+
+/// A cast at `aim` (a column; its ground is found) instead of where the
+/// player looks: the trailer's director. It skips Gravitia's second ask.
+fn cast_at(game: &mut super::Game<'_>, player: &super::NativeServerPlayer, skill: Skill, tune: Tuning, aim: Option<[f64; 3]>) {
     let tune = tune.clamped(skill);
     let t = now();
     let running = SPELLS.with(|s| s.borrow().iter().any(|spell| spell.skill == skill && spell.caster == player.uuid));
@@ -202,7 +209,7 @@ pub fn cast(game: &mut super::Game<'_>, player: &super::NativeServerPlayer, skil
         deny(game, player.uuid, format!("{} is recharging — {}s", skill.title(), (ready - t + 19) / 20));
         return;
     }
-    if skill == Skill::Gravitia {
+    if skill == Skill::Gravitia && aim.is_none() {
         if city::banished(&player.dimension) {
             deny(game, player.uuid, "This world is already in Imaginary Space".to_owned());
             return;
@@ -222,7 +229,16 @@ pub fn cast(game: &mut super::Game<'_>, player: &super::NativeServerPlayer, skil
             return;
         }
     }
-    let (target, ground_known) = aim_ground(game, player, skill.reach(), skill.sky_aim());
+    let (target, ground_known) = match aim {
+        Some(at) => {
+            let ground = game
+                .native_surface_heights(&player.dimension, &[(at[0].floor() as i32, at[2].floor() as i32)], NativeHeightmap::MotionBlockingNoLeaves)
+                .ok()
+                .and_then(|h| h.first().copied().flatten());
+            ([at[0], ground.map_or(at[1], f64::from), at[2]], ground.is_some())
+        }
+        None => aim_ground(game, player, skill.reach(), skill.sky_aim()),
+    };
     let seed = spell_seed(player.uuid, t);
     let (min_y, height) = game.native_world_height();
     let mut spell = Spell::new(skill, player, target, seed, tune, min_y, min_y + height - 1);
@@ -1894,6 +1910,154 @@ fn nova_tick(game: &mut super::Game<'_>, spell: &mut Spell, t: i32) {
         }
     }
     apply(game, &dim, &edit);
+}
+
+// ---- the trailer's director ----------------------------------------------------------------------------------
+//
+// `/tss trailer`: every skill in turn, each cast from a fresh spot well away
+// from the last one's mark, at night, from a creative player, its film
+// played. The window hides its HUD and writes the moments down for the
+// recording script to cut by (`tools/trailer/record.ps1`).
+
+/// The order, how far ahead each is cast, and how long it is watched (ticks).
+const TRAILER: [(Skill, f64, u64); 7] = [
+    (Skill::ShootingStar, 260.0, 470),
+    (Skill::Gungnir, 300.0, 440),
+    (Skill::SevenStars, 320.0, 500),
+    (Skill::Tesseract, 260.0, 600),
+    (Skill::EventHorizon, 70.0, 430),
+    (Skill::Supernova, 150.0, 440),
+    // Last: it sends the world away for good.
+    (Skill::Gravitia, 0.0, 740),
+];
+/// Blocks between two spots: past the biggest mark (Gungnir's 400).
+const TRAILER_SPACING: f64 = 1400.0;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Take {
+    /// Up over the next spot, its land loading.
+    Fly,
+    /// Down onto its ground, facing the way the cast goes.
+    Land,
+    Cast,
+    Watch,
+}
+
+struct Director {
+    player: u128,
+    name: String,
+    dimension: String,
+    origin: [f64; 3],
+    step: usize,
+    take: Take,
+    until: u64,
+}
+
+thread_local! {
+    static DIRECTOR: RefCell<Option<Director>> = const { RefCell::new(None) };
+}
+
+pub fn start_trailer(game: &mut super::Game<'_>, player: &super::NativeServerPlayer) {
+    let name = player.name.clone();
+    for line in [
+        format!("gamemode creative {name}"),
+        "gamerule doDaylightCycle false".to_owned(),
+        "gamerule doWeatherCycle false".to_owned(),
+        "weather clear".to_owned(),
+    ] {
+        game.native_run_command(&line);
+    }
+    let _ = game.native_net_send_to_player(player.uuid, CHANNEL, &[sk::FX_TRAILER, 1]);
+    DIRECTOR.with(|d| {
+        *d.borrow_mut() = Some(Director {
+            player: player.uuid,
+            name,
+            dimension: player.dimension.clone(),
+            origin: player.position,
+            step: 0,
+            take: Take::Fly,
+            until: now() + 20,
+        })
+    });
+    log::info!("[{ID}] the trailer starts");
+}
+
+pub fn stop_trailer(game: &mut super::Game<'_>) {
+    if let Some(d) = DIRECTOR.with(|d| d.borrow_mut().take()) {
+        let _ = game.native_net_send_to_player(d.player, CHANNEL, &[sk::FX_TRAILER, 0]);
+        log::info!("[{ID}] the trailer ends");
+    }
+}
+
+/// Where take `step` is shot from: along +x from where the director started.
+fn trailer_spot(origin: [f64; 3], step: usize) -> [f64; 2] {
+    [origin[0].floor() + 0.5 + TRAILER_SPACING * (step + 1) as f64, origin[2].floor() + 0.5]
+}
+
+fn direct_trailer(game: &mut super::Game<'_>) {
+    let Some((player, step, take, until, origin, dimension, name)) =
+        DIRECTOR.with(|d| d.borrow().as_ref().map(|d| (d.player, d.step, d.take, d.until, d.origin, d.dimension.clone(), d.name.clone())))
+    else {
+        return;
+    };
+    if now() < until {
+        return;
+    }
+    let Some(&(skill, ahead, watch)) = TRAILER.get(step) else {
+        stop_trailer(game);
+        return;
+    };
+    let Some(me) = game.native_server_players().into_iter().find(|p| p.uuid == player) else {
+        stop_trailer(game);
+        return;
+    };
+    let spot = trailer_spot(origin, step);
+    let next = |take: Take, wait: u64| {
+        DIRECTOR.with(|d| {
+            if let Some(d) = d.borrow_mut().as_mut() {
+                d.take = take;
+                d.until = now() + wait;
+            }
+        })
+    };
+    match take {
+        Take::Fly => {
+            game.native_run_command(&format!("execute in {dimension} run tp {name} {:.1} 240 {:.1} -90 10", spot[0], spot[1]));
+            game.native_run_command("time set 18000");
+            next(Take::Land, 80);
+        }
+        Take::Land => {
+            let (x, z) = (spot[0].floor() as i32, spot[1].floor() as i32);
+            let ground = game
+                .native_surface_heights(&dimension, &[(x, z)], NativeHeightmap::MotionBlocking)
+                .ok()
+                .and_then(|h| h.first().copied().flatten());
+            match ground {
+                Some(y) => {
+                    game.native_run_command(&format!("execute in {dimension} run tp {name} {:.1} {} {:.1} -90 6", spot[0], y, spot[1]));
+                    next(Take::Cast, 60);
+                }
+                // Its land is not in yet.
+                None => next(Take::Land, 20),
+            }
+        }
+        Take::Cast => {
+            // Facing +x, so the target is straight ahead.
+            let aim = [me.position[0] + ahead, me.position[1], me.position[2]];
+            let tune = Tuning::initial(skill);
+            cast_at(game, &me, skill, tune, Some(aim));
+            next(Take::Watch, watch);
+        }
+        Take::Watch => {
+            DIRECTOR.with(|d| {
+                if let Some(d) = d.borrow_mut().as_mut() {
+                    d.step += 1;
+                    d.take = Take::Fly;
+                    d.until = now() + 10;
+                }
+            });
+        }
+    }
 }
 
 // ---- what a spell does to the living ----------------------------------------------------------------------------

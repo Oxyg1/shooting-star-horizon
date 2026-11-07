@@ -673,6 +673,8 @@ pub const FX_SELECT: u8 = 6;
 pub const FX_HELLO: u8 = 7;
 /// A level that is Imaginary Space: seed (u32 LE), then its dimension's name.
 pub const FX_VOID: u8 = 8;
+/// The trailer director on (1) or off (0): `[FX_TRAILER, on]`.
+pub const FX_TRAILER: u8 = 10;
 
 /// A spell as its effects are sent: who, what, where, and how it was tuned.
 #[derive(Clone, Copy, Debug, PartialEq)]
