@@ -30,7 +30,7 @@ pub struct Spell {
 }
 
 impl Spell {
-    fn seed_f(&self) -> f32 {
+    pub fn seed_f(&self) -> f32 {
         (self.start.seed & 0xFFFF) as f32 / 65535.0
     }
 }
@@ -61,7 +61,7 @@ fn edge_toward(target: [f64; 3], from: [f64; 3], radius: f64) -> [f64; 3] {
 }
 
 /// `impactSequence`: anime impact frames, one of `modes` each twelfth of a second.
-fn impact_sequence(screen: &mut Screen, since: f32, strength: f32, step: f32, modes: &[i32]) {
+pub fn impact_sequence(screen: &mut Screen, since: f32, strength: f32, step: f32, modes: &[i32]) {
     if since < 0.0 || strength <= 0.0 {
         return;
     }
@@ -69,12 +69,37 @@ fn impact_sequence(screen: &mut Screen, since: f32, strength: f32, step: f32, mo
     if let Some(mode) = modes.get(i)
         && *mode >= 0
     {
-        screen.add_impact(strength, *mode, 0.5, 0.5);
+        let [x, y] = focus();
+        screen.add_impact(strength, *mode, x, y);
     }
 }
 
+thread_local! {
+    /// The camera this frame and the point the spell being lit strikes.
+    static FOCUS: std::cell::Cell<(Option<gravitia::glam_like::Proj>, [f64; 3], Option<[f64; 3]>)> =
+        const { std::cell::Cell::new((None, [0.0; 3], None)) };
+}
+
+/// Where on the screen the impact frames centre: the spell's point of
+/// impact as the camera sees it (the middle when it is behind or unknown).
+pub fn focus() -> [f32; 2] {
+    let (proj, camera, point) = FOCUS.with(|f| f.get());
+    match (proj, point) {
+        (Some(p), Some(at)) => p.project([(at[0] - camera[0]) as f32, (at[1] - camera[1]) as f32, (at[2] - camera[2]) as f32]),
+        _ => [0.5, 0.5],
+    }
+}
+
+/// The impact frames from here on centre on `point`.
+pub fn focus_on(point: [f64; 3]) {
+    FOCUS.with(|f| {
+        let (proj, camera, _) = f.get();
+        f.set((proj, camera, Some(point)));
+    });
+}
+
 /// `stoppedWorld`: the world drained of colour for a breath.
-fn stopped_world(screen: &mut Screen, k: f32) {
+pub fn stopped_world(screen: &mut Screen, k: f32) {
     if k > 0.001 {
         screen.desaturate = screen.desaturate.max(k);
         screen.grade[0] = screen.grade[0].max(0.3 * k);
@@ -117,19 +142,195 @@ pub fn frame(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f
 pub fn frame_in(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f32, context: &Context) -> Frame {
     let mut frame = Frame { time, ..Frame::default() };
     for spell in spells {
+        FOCUS.with(|f| f.set((context.proj, camera, Some(spell.start.target))));
         match spell.start.skill {
             Skill::ShootingStar => star(&mut frame, spell, camera, min_y),
             Skill::Gungnir => gungnir(&mut frame, spell, camera, max_y),
             Skill::SevenStars => seven(&mut frame, spell, camera),
             Skill::Tesseract => tess(&mut frame, spell, camera, min_y, max_y),
             Skill::Gravitia => gravitia::frame(&mut frame, spell, camera, context.world, context.proj.as_ref()),
+            Skill::EventHorizon => super::shooting_star_horizon::frame(&mut frame, spell, camera),
         }
     }
+    extras(&mut frame, spells, camera, min_y);
     if let Some(heading) = context.void {
         // Imaginary Space's sky: space for good.
         gravitia::void_sky(&mut frame, heading);
     }
     frame
+}
+
+// ---- the port's own light, for every spell -------------------------------------------------------------------------
+//
+// Over the original's passes: `hz_glow` first (the spells' light falling on
+// the blocks round them), `hz_shock` last (the air bent by their fronts and
+// their heat). Neither is the original's; both leave its passes as they are.
+
+/// A light on the world: where, how far it reaches, its colour times its
+/// strength, and the height of its column (0 for a point).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Light {
+    pub at: [f64; 3],
+    pub reach: f32,
+    pub color: [f32; 3],
+    pub tall: f32,
+}
+
+/// A shock front (a sphere going out) or a heat source (`radius` its size).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Front {
+    pub at: [f64; 3],
+    pub radius: f32,
+    pub strength: f32,
+    pub thick: f32,
+}
+
+fn rel(p: [f64; 3], camera: [f64; 3]) -> [f32; 3] {
+    [(p[0] - camera[0]) as f32, (p[1] - camera[1]) as f32, (p[2] - camera[2]) as f32]
+}
+
+/// Each spell's lights, fronts and heat.
+fn spell_extras(spell: &Spell, min_y: i32, lights: &mut Vec<Light>, shocks: &mut Vec<Front>, heat: &mut Vec<Front>) {
+    let t = spell.t;
+    let start = &spell.start;
+    let target = start.target;
+    match start.skill {
+        Skill::ShootingStar => {
+            let r = start.power;
+            let laser = window(t, 9.0, 10.5, 352.0, 353.0);
+            let beam = window(t, 352.0, 352.5, 485.0, 487.0);
+            let column = [target[0], f64::from(min_y), target[2]];
+            if laser > 0.0 {
+                lights.push(Light { at: column, reach: 8.0, color: [2.0 * laser, 0.25 * laser, 0.3 * laser], tall: 600.0 });
+            }
+            if beam > 0.0 {
+                let k = beam * 7.0;
+                lights.push(Light { at: column, reach: r * 0.6 + 12.0, color: [1.0 * k, 0.42 * k, 0.48 * k], tall: 600.0 });
+            }
+            let since = t - 352.0;
+            if (0.0..50.0).contains(&since) {
+                shocks.push(Front { at: target, radius: r + since * 6.0, strength: 1.0 - since / 50.0, thick: 4.0 });
+            }
+            if t > 486.0 {
+                let k = (-(t - 486.0) / 420.0).exp();
+                heat.push(Front { at: [target[0], target[1] - 4.0, target[2]], radius: r * 0.8 + 4.0, strength: k, thick: 0.0 });
+                lights.push(Light { at: [target[0], target[1] - 6.0, target[2]], reach: r * 0.7 + 6.0, color: [2.2 * k, 0.5 * k, 0.15 * k], tall: 0.0 });
+            }
+        }
+        Skill::Gungnir => {
+            let radius = sk::gungnir_radius(start.power);
+            let since = t - 322.0;
+            if (0.0..80.0).contains(&since) {
+                let k = (-since / 10.0).exp() * 22.0;
+                lights.push(Light { at: [target[0], target[1] + 6.0, target[2]], reach: radius as f32 * 0.3 + 20.0, color: [1.0 * k, 0.72 * k, 0.45 * k], tall: 0.0 });
+            }
+            if since > 0.0 {
+                let k = window(since, 0.0, 10.0, 1.0e9, 1.0e9) * (-since / 600.0).exp();
+                lights.push(Light { at: target, reach: radius as f32 * 0.18 + 10.0, color: [3.0 * k, 0.9 * k, 0.2 * k], tall: 0.0 });
+                heat.push(Front { at: target, radius: radius as f32 * 0.15 + 8.0, strength: k, thick: 0.0 });
+                let front = sk::gungnir_front(f64::from(t), radius) as f32;
+                if front > 0.0 && since < 90.0 {
+                    shocks.push(Front { at: target, radius: front, strength: 1.2 * (1.0 - since / 90.0), thick: 6.0 });
+                }
+            }
+        }
+        Skill::SevenStars => {
+            let nodes = dipper_nodes(start);
+            let scale = f64::from(start.power);
+            for (i, node) in nodes.iter().enumerate() {
+                let land = sk::dipper_land_tick(i) as f32;
+                let s = t - land;
+                let crater = sk::dipper_crater_radius(i, scale) as f32;
+                if (-30.0..0.0).contains(&s) {
+                    // The star coming down lights the ground under it.
+                    let k = 1.0 + s / 30.0;
+                    lights.push(Light { at: [node[0], node[1] + 30.0 * f64::from(-s / 30.0), node[2]], reach: crater * 2.0, color: [2.0 * k, 1.8 * k, 3.0 * k], tall: 0.0 });
+                }
+                if (0.0..40.0).contains(&s) {
+                    let k = (-s / 6.0).exp() * 18.0;
+                    lights.push(Light { at: [node[0], node[1] + 4.0, node[2]], reach: crater * 2.5 + 10.0, color: [0.85 * k, 0.8 * k, 1.0 * k], tall: 0.0 });
+                    shocks.push(Front { at: *node, radius: crater + s * 5.0, strength: 1.0 - s / 40.0, thick: 3.0 });
+                }
+                if s > 0.0 {
+                    let k = (-s / 500.0).exp();
+                    lights.push(Light { at: *node, reach: crater * 1.2 + 4.0, color: [1.3 * k, 0.8 * k, 2.2 * k], tall: 0.0 });
+                }
+            }
+        }
+        Skill::Tesseract => {
+            let on = window(t, 300.0, 340.0, 640.0, 690.0);
+            if on > 0.0 {
+                let zone = sk::tess_zone(sk::tess_scale(start.power)) as f32;
+                lights.push(Light { at: [target[0], target[1] + 40.0, target[2]], reach: zone * 0.35, color: [0.9 * on * 2.0, 1.6 * on * 2.0, 2.0 * on * 2.0], tall: 0.0 });
+            }
+            let since = t - 462.0;
+            if (0.0..40.0).contains(&since) {
+                shocks.push(Front { at: target, radius: since * 10.0, strength: 1.0 - since / 40.0, thick: 6.0 });
+            }
+        }
+        Skill::Gravitia => {}
+        Skill::EventHorizon => {
+            super::shooting_star_horizon::lights(spell, lights);
+            super::shooting_star_horizon::fronts(spell, shocks, heat);
+        }
+    }
+}
+
+/// The shared passes for every spell playing, round the original's own.
+fn extras(frame: &mut Frame, spells: &[Spell], camera: [f64; 3], min_y: i32) {
+    let mut lights = Vec::new();
+    let mut shocks = Vec::new();
+    let mut heat = Vec::new();
+    for spell in spells {
+        // A film in space has no world to light.
+        if spell.film.is_some_and(|f| f.weight > 0.5) && spell.start.skill != Skill::EventHorizon {
+            continue;
+        }
+        spell_extras(spell, min_y, &mut lights, &mut shocks, &mut heat);
+    }
+    let dist = |p: [f64; 3]| ((p[0] - camera[0]).powi(2) + (p[1] - camera[1]).powi(2) + (p[2] - camera[2]).powi(2)).sqrt() as f32;
+    // The strongest and nearest first, as many as the passes take.
+    let weight = |l: &Light| (l.color[0] + l.color[1] + l.color[2]) * l.reach / (dist(l.at) + l.reach);
+    lights.retain(|l| weight(l) > 1e-3 && dist(l.at) < l.reach * 4.0 + l.tall);
+    lights.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+    lights.truncate(8);
+    if !lights.is_empty() {
+        let n = lights.len() as f32;
+        let at = lights.iter().map(|l| { let p = rel(l.at, camera); [p[0], p[1], p[2], l.reach] }).collect();
+        let color = lights.iter().map(|l| [l.color[0], l.color[1], l.color[2], l.tall]).collect();
+        frame.passes.insert(0, Pass::new("hz_glow").vec4s("Light", at).vec4s("LightC", color).f("Lights", &[n]));
+    }
+    shocks.retain(|s| s.strength > 1e-3 && s.radius > 0.0);
+    shocks.sort_by(|a, b| (b.strength / (1.0 + dist(b.at) / 200.0)).total_cmp(&(a.strength / (1.0 + dist(a.at) / 200.0))));
+    shocks.truncate(6);
+    heat.retain(|h| h.strength > 1e-3 && dist(h.at) < h.radius * 8.0 + 200.0);
+    heat.sort_by(|a, b| dist(a.at).total_cmp(&dist(b.at)));
+    heat.truncate(4);
+    if !shocks.is_empty() || !heat.is_empty() {
+        let mut shock = vec![[0.0f32; 4]; 6];
+        let mut shock_k = vec![[0.0f32; 4]; 6];
+        for (i, s) in shocks.iter().enumerate() {
+            let p = rel(s.at, camera);
+            shock[i] = [p[0], p[1], p[2], s.radius];
+            shock_k[i] = [s.strength, s.thick, 0.0, 0.0];
+        }
+        let mut hot = vec![[0.0f32; 4]; 4];
+        let mut hot_k = vec![[0.0f32; 4]; 4];
+        for (i, h) in heat.iter().enumerate() {
+            let p = rel(h.at, camera);
+            hot[i] = [p[0], p[1], p[2], h.radius];
+            hot_k[i] = [h.strength, 0.0, 0.0, 0.0];
+        }
+        frame.passes.push(
+            Pass::new("hz_shock")
+                .vec4s("Shock", shock)
+                .vec4s("ShockK", shock_k)
+                .f("Shocks", &[shocks.len() as f32])
+                .vec4s("Heat", hot)
+                .vec4s("HeatK", hot_k)
+                .f("Heats", &[heat.len() as f32]),
+        );
+    }
 }
 
 // ---- SS-01 ----------------------------------------------------------------------------------------------------------
@@ -425,7 +626,9 @@ fn seven(frame: &mut Frame, spell: &Spell, camera: [f64; 3]) {
                 screen.add_flash(0xFFFFFF, 4.5 * near);
             } else if s - 0.05 < LANDING.len() as f32 * DRAWING {
                 let order: Vec<i32> = (0..LANDING.len()).map(|j| LANDING[(j + i) % LANDING.len()]).collect();
+                focus_on(nodes[i]);
                 impact_sequence(screen, s - 0.05, near, DRAWING, &order);
+                focus_on(start.target);
                 screen.step(12.0);
                 let drawing = ((s - 0.05) / DRAWING) as i32;
                 screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { 0.9 } else { 0.25 } * near);
@@ -478,8 +681,9 @@ mod tests {
     fn the_railgun_lays_its_beam_down_at_the_impact() {
         let s = Spell { start: start(Skill::ShootingStar, 200.0), t: 400.0, boomed: None, film: None };
         let f = frame(&[s], [0.0, 90.0, -100.0], -64, 319, 20.0);
-        assert_eq!(f.passes.len(), 1);
-        assert_eq!(f.passes[0].program, "star_beam");
+        // The original's beam, with the port's light on the world before it and its front after.
+        let programs: Vec<&str> = f.passes.iter().map(|p| p.program).collect();
+        assert_eq!(programs, ["hz_glow", "star_beam", "hz_shock"]);
         assert!(f.screen.bloom > 1.0);
         let early = frame(&[Spell { t: 3.0, ..s }], [0.0, 90.0, -100.0], -64, 319, 0.1);
         assert!(early.passes.is_empty());
@@ -489,7 +693,8 @@ mod tests {
     fn the_stars_pass_carries_all_seven() {
         let s = Spell { start: start(Skill::SevenStars, 1.0), t: 300.0, boomed: None, film: None };
         let f = frame(&[s], [0.0, 90.0, -100.0], -64, 319, 15.0);
-        let pts = f.passes[0].uniforms.iter().find(|(n, _)| *n == "Pts").expect("Pts");
+        let stars = f.passes.iter().find(|p| p.program == "stars_world").expect("the stars' pass");
+        let pts = stars.uniforms.iter().find(|(n, _)| *n == "Pts").expect("Pts");
         match &pts.1 {
             horizon_client_render::gfx::native_render::shooting_star_fxframe::Value::Vec4s(v) => assert_eq!(v.len(), 16),
             _ => panic!("Pts is a vec4 array"),

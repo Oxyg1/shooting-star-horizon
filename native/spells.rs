@@ -32,9 +32,9 @@ const SEAM: &str = "shooting_star_demo:gungnir_seam";
 #[derive(Clone, Debug)]
 struct Remote {
     selected: Skill,
-    tunes: [Tuning; 5],
+    tunes: [Tuning; sk::SKILLS],
     /// The server tick each skill is ready again.
-    ready: [u64; 5],
+    ready: [u64; sk::SKILLS],
     /// When the player was warned about Gravitia, for the second cast.
     confirm: Option<u64>,
 }
@@ -43,14 +43,8 @@ impl Default for Remote {
     fn default() -> Self {
         Remote {
             selected: Skill::ShootingStar,
-            tunes: [
-                Tuning::initial(Skill::ShootingStar),
-                Tuning::initial(Skill::Gungnir),
-                Tuning::initial(Skill::SevenStars),
-                Tuning::initial(Skill::Tesseract),
-                Tuning::initial(Skill::Gravitia),
-            ],
-            ready: [0; 5],
+            tunes: Skill::ALL.map(Tuning::initial),
+            ready: [0; sk::SKILLS],
             confirm: None,
         }
     }
@@ -143,7 +137,7 @@ fn send_state(game: &mut super::Game<'_>, uuid: u128) {
         .any(|p| p.uuid == uuid && p.game_mode == 1);
     let t = now();
     let left = with_remote(uuid, |r| {
-        let mut left = [(0u32, 1u32); 5];
+        let mut left = [(0u32, 1u32); sk::SKILLS];
         for (i, skill) in Skill::ALL.iter().enumerate() {
             let total = if creative { 20 } else { skill.cooldown() };
             left[i] = (r.ready[i].saturating_sub(t).min(u64::from(u32::MAX)) as u32, total as u32);
@@ -365,6 +359,7 @@ enum Kind {
     Seven(Box<SevenState>),
     Tess(Box<TessState>),
     Grav,
+    Hole(Box<HoleState>),
 }
 
 fn make_kind(skill: Skill, origin: [f64; 3], target: [f64; 3], seed: u64, tune: Tuning, min_y: i32) -> Kind {
@@ -374,6 +369,7 @@ fn make_kind(skill: Skill, origin: [f64; 3], target: [f64; 3], seed: u64, tune: 
         Skill::SevenStars => Kind::Seven(Box::new(SevenState::new(origin, target, tune.power))),
         Skill::Tesseract => Kind::Tess(Box::new(TessState::new(target, tune.power, min_y))),
         Skill::Gravitia => Kind::Grav,
+        Skill::EventHorizon => Kind::Hole(Box::new(HoleState::new(target, tune.power))),
     }
 }
 
@@ -541,6 +537,7 @@ fn on_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&super:
         Skill::SevenStars => seven_tick(game, spell, caster, t),
         Skill::Tesseract => tess_tick(game, spell, caster, t),
         Skill::Gravitia => grav_tick(game, spell, t),
+        Skill::EventHorizon => hole_tick(game, spell, caster, t),
     }
 }
 
@@ -1429,6 +1426,260 @@ fn grav_tick(game: &mut super::Game<'_>, spell: &mut Spell, t: i32) {
         city::banish(game, &spell.dimension, spell.seed as u32);
         log::info!("[{ID}] Gravitia: {} is sent into Imaginary Space", spell.dimension);
     }
+}
+
+// ---- SS-H1 Event Horizon (the port's own) -----------------------------------------------------------------------
+
+/// The hole's sphere as it is eaten: its centre, the ground it found there
+/// (read before anything was eaten), and how far it has got.
+struct HoleState {
+    centre: [f64; 3],
+    radius: f64,
+    /// Each column's ground (one over its top block) round the centre, read at the start.
+    ground: HashMap<(i32, i32), i32>,
+    /// The radius eaten so far.
+    eaten: f64,
+    rim: bool,
+}
+
+/// The rim's blocks: fused obsidian, some still glowing.
+const RIM: [(f64, &str); 4] = [
+    (0.5, "minecraft:obsidian"),
+    (0.66, "minecraft:crying_obsidian"),
+    (0.86, "minecraft:magma_block"),
+    (1.0, "minecraft:blackstone"),
+];
+
+impl HoleState {
+    fn new(target: [f64; 3], power: f32) -> HoleState {
+        HoleState { centre: sk::eh_center(target, power), radius: sk::eh_radius(power), ground: HashMap::new(), eaten: 0.0, rim: false }
+    }
+
+    fn reach(&self) -> i32 {
+        (self.radius + 3.0).ceil() as i32
+    }
+
+    /// Half the height of the sphere of radius `r` over column `x, z` (None: outside it).
+    fn half(&self, r: f64, x: i32, z: i32) -> Option<f64> {
+        let dx = f64::from(x) + 0.5 - self.centre[0];
+        let dz = f64::from(z) + 0.5 - self.centre[2];
+        let h = r * r - dx * dx - dz * dz;
+        (h > 0.0).then(|| h.sqrt())
+    }
+}
+
+fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&super::NativeServerPlayer>, t: i32) {
+    let dim = spell.dimension.clone();
+    let Kind::Hole(state) = &mut spell.kind else { return };
+    let (centre, radius, reach) = (state.centre, state.radius, state.reach());
+    if t == 1 {
+        // Its land stays loaded, and its ground is read before anything is eaten.
+        let owner = spell.owner();
+        let (cx, cz) = ((centre[0].floor() as i32) >> 4, (centre[2].floor() as i32) >> 4);
+        let chunks = (reach >> 4) + 1;
+        for dx in -chunks..=chunks {
+            for dz in -chunks..=chunks {
+                let chunk = [cx + dx, cz + dz];
+                if !spell.held.contains(&chunk) && hold(game, &owner, chunk) {
+                    spell.held.push(chunk);
+                }
+            }
+        }
+        let Kind::Hole(state) = &mut spell.kind else { return };
+        let mut columns = Vec::new();
+        for x in -reach..=reach {
+            for z in -reach..=reach {
+                columns.push((centre[0].floor() as i32 + x, centre[2].floor() as i32 + z));
+            }
+        }
+        if let Ok(heights) = game.native_surface_heights(&dim, &columns, NativeHeightmap::MotionBlockingNoLeaves) {
+            for (column, top) in columns.into_iter().zip(heights) {
+                if let Some(top) = top {
+                    state.ground.insert(column, top);
+                }
+            }
+        }
+    }
+    if t == 31
+        && let Some(c) = caster
+    {
+        let ticks = spell.real_ticks(sk::EH_END - 31);
+        spell.spared = evacuate(game, spell, c, radius + 4.0, ticks);
+    }
+    let Kind::Hole(state) = &mut spell.kind else { return };
+
+    // The sphere eaten outward, a shell every other tick.
+    if (sk::EH_FEED..=sk::EH_FULL).contains(&t) && (t % 2 == 0 || t == sk::EH_FULL) {
+        let r = radius * sk::eh_eaten(f64::from(t));
+        if r > state.eaten + 0.25 {
+            let mut edit = Edit::default();
+            let (cx, cz) = (centre[0].floor() as i32, centre[2].floor() as i32);
+            let ri = r.ceil() as i32;
+            for x in cx - ri..=cx + ri {
+                for z in cz - ri..=cz + ri {
+                    let Some(h) = state.half(r, x, z) else { continue };
+                    if spell.spared.is_some_and(|p| (p[0] - x).abs() <= 2 && (p[2] - z).abs() <= 2) {
+                        continue;
+                    }
+                    let top = (centre[1] + h).floor() as i32;
+                    let low = ((centre[1] - h).ceil() as i32).max(spell.min_y + 1);
+                    match state.half(state.eaten, x, z) {
+                        None => edit.column(x, z, low, (top - low + 1).max(0) as u32, AIR),
+                        Some(old) => {
+                            // Only the new shell: over the old cap and under the old bowl.
+                            let old_top = (centre[1] + old).floor() as i32;
+                            let old_low = (centre[1] - old).ceil() as i32;
+                            edit.column(x, z, old_top + 1, (top - old_top).max(0) as u32, AIR);
+                            edit.column(x, z, low, (old_low - low).max(0) as u32, AIR);
+                        }
+                    }
+                }
+            }
+            apply(game, &dim, &edit);
+            let Kind::Hole(state) = &mut spell.kind else { return };
+            state.eaten = r;
+        }
+    }
+
+    // The land torn into orbit: blocks of the ground about to be eaten fly
+    // up and spiral in; whatever reaches the hole is gone.
+    if (sk::EH_FEED - 10..sk::EH_FULL).contains(&t) {
+        let Kind::Hole(state) = &spell.kind else { return };
+        let r = radius * sk::eh_eaten(f64::from(t) + 12.0);
+        let count = (2.0 + radius / 12.0) as u64;
+        let mut picks = Vec::new();
+        for k in 0..count {
+            let a = sk::hash(spell.seed, i64::from(t), k as i64) * std::f64::consts::TAU;
+            let d = r * (0.75 + 0.3 * sk::hash(spell.seed, k as i64, i64::from(t) * 3 + 1)) + 1.5;
+            let x = (centre[0] + a.cos() * d).floor() as i32;
+            let z = (centre[2] + a.sin() * d).floor() as i32;
+            if let Some(&ground) = state.ground.get(&(x, z))
+                && (f64::from(ground) - centre[1]).abs() <= radius
+            {
+                picks.push((x, z));
+            }
+        }
+        // The top block of each, as the server has it.
+        let read = if picks.is_empty() {
+            None
+        } else {
+            game.native_read_columns(&dim, &picks, NativeHeightmap::MotionBlockingNoLeaves, (1, 0)).ok()
+        };
+        if let Some(read) = read {
+            for (i, (x, z)) in picks.iter().copied().enumerate() {
+                let (Some(Some(top)), Some(&index)) = (read.bases.get(i), read.blocks.get(i)) else { continue };
+                let Some(name) = read.palette.get(usize::from(index)) else { continue };
+                let block = name.split('[').next().unwrap_or("");
+                if block.is_empty() || is_air(block) || block.contains("water") || block.contains("lava") {
+                    continue;
+                }
+                // Out and round: the spiral's way, and up off the ground.
+                let (ox, oz) = (centre[0] - f64::from(x), centre[2] - f64::from(z));
+                let n = ox.hypot(oz).max(0.1);
+                let (ix, iz) = (ox / n, oz / n);
+                let m = [ix * 0.35 - iz * 0.55, 0.75, iz * 0.35 + ix * 0.55];
+                game.native_run_command(&format!(
+                    "execute in {dim} run summon minecraft:falling_block {}.5 {} {}.5 {{BlockState:{{Name:\"{block}\"}},Time:1,DropItem:0b,CancelDrop:1b,HurtEntities:0b,Motion:[{:.3},{:.3},{:.3}]}}",
+                    x,
+                    top + 1,
+                    z,
+                    m[0],
+                    m[1],
+                    m[2]
+                ));
+            }
+        }
+    }
+    if (sk::EH_LAND..sk::EH_FLASH).contains(&t) {
+        let pull = radius * 3.0;
+        let (x, y, z) = (centre[0], centre[1], centre[2]);
+        // The torn blocks swirl in, faster the nearer they get.
+        game.native_run_command(&format!(
+            "execute in {dim} positioned {x:.2} {y:.2} {z:.2} as @e[type=minecraft:falling_block,distance=..{pull:.0}] at @s facing {x:.2} {y:.2} {z:.2} run tp @s ^0.55 ^0.12 ^0.9"
+        ));
+        let core = (radius * 0.12).max(1.5);
+        game.native_run_command(&format!(
+            "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type=minecraft:falling_block,distance=..{core:.1}]"
+        ));
+        for kind in ["minecraft:item", "minecraft:experience_orb", "minecraft:arrow"] {
+            game.native_run_command(&format!(
+                "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type={kind},distance=..{:.1}]",
+                (state_eaten(spell) + 1.0).max(core)
+            ));
+        }
+        // The living are dragged in, and what the sphere holds is taken.
+        let feeding = t >= sk::EH_FEED;
+        for mob in game.native_mobs(&dim) {
+            let d = [x - mob.pos[0], y - mob.pos[1], z - mob.pos[2]];
+            let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if n < pull && n > 0.5 {
+                let k = 0.08 + 0.5 * (1.0 - n / pull).powi(2);
+                game.native_push_mob(&dim, mob.id, [d[0] / n * k - d[2] / n * k * 0.4, d[1] / n * k + 0.04, d[2] / n * k + d[0] / n * k * 0.4]);
+            }
+        }
+        if feeding {
+            let r = state_eaten(spell) + 1.0;
+            strike(game, spell, |p| ((p[0] - x).powi(2) + (p[1] - y).powi(2) + (p[2] - z).powi(2)).sqrt() <= r, None, None);
+        }
+    }
+
+    // The flash: the hole evaporates, the light burns what stood near, the rim fuses.
+    if t == sk::EH_FLASH {
+        let (x, y, z) = (centre[0], centre[1], centre[2]);
+        let burn = radius * 1.5;
+        strike(game, spell, |p| ((p[0] - x).powi(2) + (p[1] - y).powi(2) + (p[2] - z).powi(2)).sqrt() <= burn, None, None);
+        hole_rim(game, spell);
+        game.native_run_command(&format!(
+            "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type=minecraft:falling_block,distance=..{:.0}]",
+            radius * 3.0
+        ));
+    }
+}
+
+fn state_eaten(spell: &Spell) -> f64 {
+    match &spell.kind {
+        Kind::Hole(state) => state.eaten,
+        _ => 0.0,
+    }
+}
+
+/// The rim: one to two blocks of the ground round the sphere, fused, where
+/// there was ground (never in the air over it).
+fn hole_rim(game: &mut super::Game<'_>, spell: &mut Spell) {
+    let dim = spell.dimension.clone();
+    let seed = spell.seed;
+    let min_y = spell.min_y;
+    let Kind::Hole(state) = &mut spell.kind else { return };
+    if state.rim {
+        return;
+    }
+    state.rim = true;
+    let inner = state.radius;
+    let outer = state.radius + 1.6;
+    let (cx, cz) = (state.centre[0].floor() as i32, state.centre[2].floor() as i32);
+    let ro = outer.ceil() as i32;
+    let mut blocks: HashMap<[i32; 3], &'static str> = HashMap::new();
+    for x in cx - ro..=cx + ro {
+        for z in cz - ro..=cz + ro {
+            let Some(&ground) = state.ground.get(&(x, z)) else { continue };
+            let Some(ho) = state.half(outer, x, z) else { continue };
+            let lo = ((state.centre[1] - ho).ceil() as i32).max(min_y + 1);
+            let hi = ((state.centre[1] + ho).floor() as i32).min(ground - 1);
+            for y in lo..=hi {
+                let dy = f64::from(y) + 0.5 - state.centre[1];
+                let dx = f64::from(x) + 0.5 - state.centre[0];
+                let dz = f64::from(z) + 0.5 - state.centre[2];
+                let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if d < inner || d > outer {
+                    continue;
+                }
+                let roll = sk::hash(seed, i64::from(x) * 31 + i64::from(y), i64::from(z) * 17 - i64::from(y));
+                let block = RIM.iter().find(|(k, _)| roll < *k).map_or("minecraft:obsidian", |(_, b)| b);
+                blocks.insert([x, y, z], block);
+            }
+        }
+    }
+    paint(game, &dim, &blocks);
 }
 
 // ---- what a spell does to the living ----------------------------------------------------------------------------

@@ -289,7 +289,8 @@ fn impacts(screen: &mut Screen, since: f32, strength: f32, modes: &[i32]) {
         return;
     }
     if let Some(mode) = modes.get((since / DRAWING) as usize) {
-        screen.add_impact(strength, *mode, 0.5, 0.5);
+        let [x, y] = super::shooting_star_visuals::focus();
+        screen.add_impact(strength, *mode, x, y);
     }
 }
 

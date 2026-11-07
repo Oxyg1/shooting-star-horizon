@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz9";
+pub const VERSION: &str = "1.5.2-hz10";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -28,8 +28,9 @@ pub const CH_CMD: &str = "shooting_star:cmd";
 
 /// The mod's keys: name, label and default, as the mods page lists them. The
 /// first seven are the original's (H menu, J cutscenes, K I U Y skills; O
-/// for Gravitia); the tuning keys stand in for its menu's sliders.
-pub const KEYS: [(&str, &str, &str); 11] = [
+/// for Gravitia), then the port's own SS-H1 on B; the tuning keys stand in
+/// for its menu's sliders.
+pub const KEYS: [(&str, &str, &str); 12] = [
     ("skill_menu", "Open skill menu", "key.keyboard.h"),
     ("cutscenes", "Skip / toggle spell cutscenes", "key.keyboard.j"),
     ("the_shooting_star", "The Shooting Star: SS-01 Railgun", "key.keyboard.k"),
@@ -37,6 +38,7 @@ pub const KEYS: [(&str, &str, &str); 11] = [
     ("seven_stars", "The Shooting Star: SS-04 Seven Stars", "key.keyboard.u"),
     ("tesseract", "The Shooting Star: SS-05 Tesseract", "key.keyboard.y"),
     ("gravitia", "The Shooting Star: SS-06 Gravitia", "key.keyboard.o"),
+    ("event_horizon", "The Shooting Star: SS-H1 Event Horizon (the port's own)", "key.keyboard.b"),
     ("cycle", "Next skill", "key.keyboard.g"),
     ("power", "Selected skill: power (Shift: down)", "key.keyboard.n"),
     ("speed", "Selected skill: speed (Shift: down)", "key.keyboard.m"),
@@ -52,19 +54,15 @@ thread_local! {
 
 thread_local! {
     static SELECTED: std::cell::Cell<Skill> = const { std::cell::Cell::new(Skill::ShootingStar) };
-    static TUNES: std::cell::RefCell<[Tuning; 5]> = std::cell::RefCell::new([
-        Tuning::initial(Skill::ShootingStar),
-        Tuning::initial(Skill::Gungnir),
-        Tuning::initial(Skill::SevenStars),
-        Tuning::initial(Skill::Tesseract),
-        Tuning::initial(Skill::Gravitia),
-    ]);
+    static TUNES: std::cell::RefCell<[Tuning; sk::SKILLS]> = std::cell::RefCell::new(Skill::ALL.map(Tuning::initial));
     static CUTSCENES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// The effects' quality: 0 low, 1 medium, 2 high (the default), 3 ultra.
+    static QUALITY: std::cell::Cell<u8> = const { std::cell::Cell::new(2) };
     static LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The selection and tuning wait to reach the server.
     static DIRTY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Each skill's recharge as the server last told it: ticks left, ticks in all.
-    static COOLDOWNS: std::cell::RefCell<[(u32, u32); 5]> = const { std::cell::RefCell::new([(0, 1); 5]) };
+    static COOLDOWNS: std::cell::RefCell<[(u32, u32); sk::SKILLS]> = const { std::cell::RefCell::new([(0, 1); sk::SKILLS]) };
     /// When the player last picked a skill, so the HUD can introduce it.
     static SHOWN: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
     /// The menu row waiting for a key press, while it waits.
@@ -119,6 +117,10 @@ fn load(game: &super::Game<'_>) {
         let (key, value) = (key.trim(), value.trim());
         if key == "cutscenes" {
             CUTSCENES.with(|c| c.set(value != "false"));
+        } else if key == "quality" {
+            if let Some(q) = QUALITIES.iter().position(|n| *n == value) {
+                QUALITY.with(|c| c.set(q as u8));
+            }
         } else if key == "selected" {
             if let Some(skill) = Skill::by_id(value) {
                 SELECTED.with(|s| s.set(skill));
@@ -148,6 +150,7 @@ fn save(game: &super::Game<'_>) {
     let mut out = String::from("# The Shooting Star (Demo): the remote's skills\n");
     out.push_str(&format!("cutscenes={}\n", CUTSCENES.with(std::cell::Cell::get)));
     out.push_str(&format!("selected={}\n", selected().id()));
+    out.push_str(&format!("quality={}\n", QUALITIES[usize::from(quality())]));
     for skill in Skill::ALL {
         let t = tune(skill);
         let damage = if t.damage.is_infinite() { "infinite".to_owned() } else { t.damage.to_string() };
@@ -156,6 +159,13 @@ fn save(game: &super::Game<'_>) {
     if let Err(error) = std::fs::write(&path, out) {
         log::warn!("[{ID}] the remote's settings could not be saved: {error}");
     }
+}
+
+/// The effects' quality settings, by name.
+pub const QUALITIES: [&str; 4] = ["low", "medium", "high", "ultra"];
+
+pub fn quality() -> u8 {
+    QUALITY.with(std::cell::Cell::get).min(3)
 }
 
 /// Whether the held stack is the Stellar Remote.
@@ -515,6 +525,7 @@ pub fn client_tick(game: &mut super::Game<'_>) {
         }
         spell.clock += f64::from(spell.start.speed);
         shockwave(game, spell);
+        pull(game, spell);
     }
     spells.retain(|s| s.age <= s.start.skill.fx_duration());
     SPELLS.with(|s| {
@@ -532,6 +543,7 @@ fn zone_of(start: &sk::Start) -> f64 {
         Skill::SevenStars => sk::dipper_span(f64::from(start.power)) * 0.5,
         Skill::Tesseract => f64::from(sk::tess_zone(sk::tess_scale(start.power))) * 0.5,
         Skill::Gravitia => 1.0e7,
+        Skill::EventHorizon => sk::eh_radius(start.power),
     }
 }
 
@@ -885,7 +897,93 @@ fn cue(game: &mut super::Game<'_>, spell: &mut ClientSpell, t: i32, now: u64) {
             }
             let _ = caster;
         }
+        Skill::EventHorizon => event_horizon_cue(game, &start, film, cam, t, now),
     }
+}
+
+/// A vanilla sound (the port's own spell has no score of the original's):
+/// in the head during the film, out in the world else, carrying `reach` blocks.
+fn vanilla(game: &mut super::Game<'_>, film: bool, name: &str, at: [f64; 3], reach: f32, pitch: f32) {
+    if film {
+        if game.native_window() {
+            game.audio.play(name, None, 1.0, pitch);
+        }
+        return;
+    }
+    game.native_play_local_sound(name, at, (reach / 16.0).max(1.0), pitch, 0);
+}
+
+/// SS-H1's sound: a low hum as it falls, the ground's groan as it feeds,
+/// a heartbeat that quickens, a breath of silence, and the flash.
+fn event_horizon_cue(game: &mut super::Game<'_>, start: &sk::Start, film: bool, cam: [f64; 3], t: i32, now: u64) {
+    let radius = sk::eh_radius(start.power);
+    let hole = sk::eh_hole(start.target, start.power, f64::from(t));
+    let ear = ear(cam, hole, radius);
+    let reach = (radius * 8.0 + 320.0) as f32;
+    let mut s = |name: &str, pitch: f32| vanilla(game, film, name, ear, reach, pitch);
+    match t {
+        9 => s("minecraft:block.beacon.activate", 0.5),
+        40 => s("minecraft:block.end_portal.spawn", 0.55),
+        70 => s("minecraft:entity.elder_guardian.curse", 0.5),
+        130 => {
+            s("minecraft:entity.warden.sonic_boom", 0.5);
+            s("minecraft:entity.generic.explode", 0.5);
+        }
+        160 => s("minecraft:block.conduit.activate", 0.5),
+        200 | 250 => s("minecraft:block.respawn_anchor.charge", 0.5),
+        300 => s("minecraft:block.beacon.deactivate", 0.5),
+        312 => s("minecraft:block.sculk_shrieker.shriek", 0.5),
+        t if t == sk::EH_FLASH => {
+            s("minecraft:item.trident.thunder", 0.6);
+            s("minecraft:entity.warden.sonic_boom", 0.8);
+            s("minecraft:entity.generic.explode", 0.6);
+            s("minecraft:entity.lightning_bolt.thunder", 0.7);
+        }
+        362 => s("minecraft:block.respawn_anchor.deplete", 0.5),
+        400 | 470 => s("minecraft:block.amethyst_block.resonate", 0.5),
+        _ => {}
+    }
+    // The fall hums; the feeding groans.
+    if (70..130).contains(&t) && t % 12 == 0 {
+        s("minecraft:block.beacon.ambient", 0.5 + (t - 70) as f32 / 120.0);
+    }
+    if (130..sk::EH_COLLAPSE).contains(&t) && t % 40 == 10 {
+        s("minecraft:block.portal.ambient", 0.5);
+    }
+    // The heartbeat quickens toward the collapse.
+    if (150..sk::EH_COLLAPSE).contains(&t) {
+        let gap = 26 - (t - 150) * 16 / (sk::EH_COLLAPSE - 150);
+        if (t - 150) % gap.max(8) == 0 {
+            s("minecraft:entity.warden.heartbeat", 0.6);
+        }
+    }
+    if t == 130 {
+        jolt(hole, 1.0, radius * 10.0 + 300.0, now);
+    }
+    if (sk::EH_FEED..sk::EH_COLLAPSE).contains(&t) && t % 10 == 0 {
+        jolt(hole, 0.25 + 0.3 * sk::eh_eaten(f64::from(t)) as f32, radius * 6.0 + 200.0, now);
+    }
+    if t == sk::EH_FLASH {
+        jolt(hole, 2.2, radius * 16.0 + 600.0, now);
+    }
+}
+
+/// The hole pulls the player in while it feeds (the caster stands it out).
+fn pull(game: &mut super::Game<'_>, spell: &ClientSpell) {
+    if spell.start.skill != Skill::EventHorizon || spell.start.mine || !(sk::EH_LAND..sk::EH_FLASH).contains(&spell.age) {
+        return;
+    }
+    let Some(player) = game.native_player() else { return };
+    let radius = sk::eh_radius(spell.start.power);
+    let hole = sk::eh_hole(spell.start.target, spell.start.power, f64::from(spell.age));
+    let d = [hole[0] - player.x, hole[1] - (player.y + 1.0), hole[2] - player.z];
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let reach = radius * 3.0;
+    if n < 1.0 || n > reach {
+        return;
+    }
+    let k = (0.02 + 0.16 * (1.0 - n / reach).powi(2)) * if spell.age >= sk::EH_FEED { 1.0 } else { 0.4 };
+    game.native_push_player([(d[0] / n * k) as f32, (d[1] / n * k + 0.02) as f32, (d[2] / n * k) as f32]);
 }
 
 /// Gungnir's shock front throws the player outward when it passes them,
@@ -988,11 +1086,12 @@ enum Spot {
     Key,
     Films,
     Reset,
+    Quality,
 }
 
 struct Menu {
     panel: [f32; 4],
-    list: [[f32; 4]; 5],
+    list: [[f32; 4]; sk::SKILLS],
     banner: [f32; 4],
     text_y: f32,
     rows: [[f32; 4]; 3],
@@ -1001,6 +1100,7 @@ struct Menu {
     key: [f32; 4],
     films: [f32; 4],
     reset: [f32; 4],
+    quality: [f32; 4],
 }
 
 fn layout(width: f32, height: f32) -> Menu {
@@ -1009,8 +1109,9 @@ fn layout(width: f32, height: f32) -> Menu {
     let (x, y) = (((width - pw) / 2.0).floor(), ((height - ph) / 2.0).floor());
     let top = y + 26.0;
     let list_w = (pw * 0.36).floor();
-    let row_h = ((ph - 26.0 - 22.0) / 5.0).min(42.0).floor();
-    let mut list = [[0.0; 4]; 5];
+    let n = sk::SKILLS as f32;
+    let row_h = ((ph - 26.0 - 22.0) / n).min(42.0).floor();
+    let mut list = [[0.0; 4]; sk::SKILLS];
     for (i, row) in list.iter_mut().enumerate() {
         *row = [x + 8.0, top + i as f32 * row_h, list_w, row_h - 4.0];
     }
@@ -1031,9 +1132,9 @@ fn layout(width: f32, height: f32) -> Menu {
         up[i] = [rx + rw - 16.0, ry + 1.0, 15.0, 13.0];
     }
     let by = rows_y + 3.0 * 17.0 + 4.0;
-    let bw = ((rw - 8.0) / 3.0).floor();
+    let bw = ((rw - 12.0) / 4.0).floor();
     // As tall as what is in it, with the hint's line under it.
-    let fit = (top + 5.0 * row_h).max(by + 15.0) + 20.0 - y;
+    let fit = (top + n * row_h).max(by + 15.0) + 20.0 - y;
     Menu {
         panel: [x, y, pw, ph.min(fit).floor()],
         list,
@@ -1045,6 +1146,7 @@ fn layout(width: f32, height: f32) -> Menu {
         key: [rx, by, bw, 15.0],
         films: [rx + bw + 4.0, by, bw, 15.0],
         reset: [rx + 2.0 * (bw + 4.0), by, bw, 15.0],
+        quality: [rx + 3.0 * (bw + 4.0), by, bw, 15.0],
     }
 }
 
@@ -1068,7 +1170,7 @@ impl Menu {
                 return Some(Spot::Row(*knob));
             }
         }
-        [(self.key, Spot::Key), (self.films, Spot::Films), (self.reset, Spot::Reset)].into_iter().find(|(r, _)| inside(*r, p)).map(|(_, s)| s)
+        [(self.key, Spot::Key), (self.films, Spot::Films), (self.reset, Spot::Reset), (self.quality, Spot::Quality)].into_iter().find(|(r, _)| inside(*r, p)).map(|(_, s)| s)
     }
 }
 
@@ -1121,6 +1223,8 @@ fn banner_sprite(skill: Skill) -> &'static str {
         Skill::SevenStars => "shooting_star_demo:gui/sprites/skill/stellar_remote/seven_stars",
         Skill::Tesseract => "shooting_star_demo:gui/sprites/skill/stellar_remote/tesseract",
         Skill::Gravitia => "shooting_star_demo:gui/sprites/skill/stellar_remote/gravitia",
+        // The port's own picture, made for it.
+        Skill::EventHorizon => "shooting_star_demo:gui/sprites/skill/stellar_remote/event_horizon",
     }
 }
 
@@ -1280,8 +1384,10 @@ pub fn menu_render(game: &super::Game<'_>, batch: &mut crate::hud::HudBatch, scr
     let binding = BINDING.with(std::cell::Cell::get) == Some(chosen.index());
     button(batch, atlas, m.key, &if binding { "Press a key…".to_owned() } else { format!("Key: {key}") }, accent, hot == Some(Spot::Key) || binding, false);
     let films = CUTSCENES.with(std::cell::Cell::get);
-    button(batch, atlas, m.films, if films { "Cutscenes: On" } else { "Cutscenes: Off" }, accent, hot == Some(Spot::Films), false);
+    button(batch, atlas, m.films, if films { "Films: On" } else { "Films: Off" }, accent, hot == Some(Spot::Films), false);
     button(batch, atlas, m.reset, "Reset", accent, hot == Some(Spot::Reset), false);
+    let q = ["FX: Low", "FX: Med", "FX: High", "FX: Ultra"][usize::from(quality())];
+    button(batch, atlas, m.quality, q, accent, hot == Some(Spot::Quality), false);
 
     // What the pointer is over, said at the bottom.
     let hint = if binding {
@@ -1293,6 +1399,7 @@ pub fn menu_render(game: &super::Game<'_>, batch: &mut crate::hud::HudBatch, scr
             Some(Spot::Key) => "Click, then press the key that picks this skill".to_owned(),
             Some(Spot::Films) => "The cutscenes in space; the cutscene key skips one".to_owned(),
             Some(Spot::Reset) => "Power, damage and speed back to the original's".to_owned(),
+            Some(Spot::Quality) => "Effects quality: Low and Med for weaker GPUs, Ultra draws at full resolution".to_owned(),
             None => format!("↑↓ choose · ←→ power · {} closes", key_label(&mod_key(game, "skill_menu"))),
         }
     };
@@ -1332,6 +1439,12 @@ pub fn menu_click(game: &super::Game<'_>, screen: &super::NativeScreenView<'_>, 
             set_tune(chosen, Tuning::initial(chosen));
             save(game);
             ui_sound("ws_warp_out", 1.0);
+        }
+        Some(Spot::Quality) => {
+            let step = if button == 1 { 3 } else { 1 };
+            QUALITY.with(|q| q.set((q.get().min(3) + step) % 4));
+            save(game);
+            ui_sound("ws_bound", 1.0);
         }
         None => {}
     }
@@ -1587,6 +1700,7 @@ pub fn frame_tick(game: &super::Game<'_>, partial: f32, camera: [f64; 3], primit
     let time = (TICKS.with(std::cell::Cell::get) as f32 + partial) / 20.0;
     let context = light_context(game);
     let mut frame = super::shooting_star_visuals::frame_in(&views, camera, min_y, min_y + height - 1, time, &context);
+    frame.quality = quality();
     if !assets_ok() {
         // Until the first run has the original's shaders, nothing to draw them with.
         frame.passes.clear();

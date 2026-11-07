@@ -165,7 +165,7 @@ pub struct Machine {
 }
 
 /// A frame's whole ask.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub passes: Vec<Pass>,
     pub screen: Screen,
@@ -173,6 +173,14 @@ pub struct Frame {
     pub time: f32,
     /// Gravitia's machine, while it is in the sky or the film.
     pub machine: Option<Machine>,
+    /// The effects' quality: 0 low, 1 medium, 2 high, 3 ultra.
+    pub quality: u8,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Frame { passes: Vec::new(), screen: Screen::default(), time: 0.0, machine: None, quality: 2 }
+    }
 }
 
 impl Frame {

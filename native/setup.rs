@@ -63,6 +63,11 @@ const OWN: &[(&str, &[u8])] = &[
     ("data/shooting_star_demo/horizon/block/star_core.json", data!("content/data/shooting_star_demo/horizon/block/star_core.json")),
     ("data/shooting_star_demo/horizon/block/star_trace.json", data!("content/data/shooting_star_demo/horizon/block/star_trace.json")),
     ("data/shooting_star_demo/horizon/item/stellar_remote.json", data!("content/data/shooting_star_demo/horizon/item/stellar_remote.json")),
+    // SS-H1's card: the port's own picture.
+    (
+        "assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png",
+        data!("content/assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png"),
+    ),
 ];
 
 /// The films' recorder (`tools/films`), compiled.
@@ -106,8 +111,10 @@ pub fn content_dir(game_dir: &Path) -> PathBuf {
 /// The content mod is there with the original's files.
 pub fn ready(game_dir: &Path) -> bool {
     let data = content_dir(game_dir).join("data").join(MOD_ID);
-    // hz9 added Gravitia's machine: an older content mod is built again.
-    data.join("fx").join("composite.fsh").is_file() && data.join("models").join("gravitia").join("machine.bin").is_file()
+    // hz9 added Gravitia's machine and hz10 SS-H1's card: an older content
+    // mod is built again (from the jars already kept, nothing is downloaded).
+    let card = content_dir(game_dir).join("assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png");
+    data.join("fx").join("composite.fsh").is_file() && data.join("models").join("gravitia").join("machine.bin").is_file() && card.is_file()
 }
 
 /// Its films' tables are there.

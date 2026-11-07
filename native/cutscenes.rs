@@ -537,6 +537,7 @@ pub fn of(start: &sk::Start, nodes: Option<[V; 7]>, heights: (i32, i32)) -> Opti
         Skill::SevenStars => nodes.map(|n| seven(start.power, n)),
         Skill::Tesseract => Some(super::shooting_star_tesseract::cutscene(super::shooting_star_tesseract::Square::new(start, heights.0, heights.1))),
         Skill::Gravitia => Some(super::shooting_star_gravitia::cutscene()),
+        Skill::EventHorizon => Some(super::shooting_star_horizon::cutscene(start)),
     }
 }
 

@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.9.0"
+version = "0.10.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -70,6 +70,13 @@ file = "crates/horizon-client/src/game/native_hooks.rs"
 name = "shooting_star_gravitia"
 source = "gravitia.rs"
 
+# SS-H1 Event Horizon, the port's own skill: its light, screen and film.
+[[module]]
+id = "horizon"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_horizon"
+source = "horizon.rs"
+
 # The first run: the original's files fetched from CurseForge and made into
 # the content mod (this repository carries none of them).
 [[module]]
@@ -93,6 +100,15 @@ id = "glsl"
 file = "crates/horizon-client-render/src/gfx/native_render.rs"
 name = "shooting_star_glsl"
 source = "glsl.rs"
+visibility = "pub"
+
+# The port's own fx programs (light on the world, shock fronts, streaks,
+# the black hole), in the original's dialect.
+[[module]]
+id = "hzfx"
+file = "crates/horizon-client-render/src/gfx/native_render.rs"
+name = "shooting_star_hzfx"
+source = "hzfx.rs"
 visibility = "pub"
 
 # The render pass: the original's chain of fx passes, bloom and composite,

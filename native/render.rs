@@ -16,6 +16,7 @@
 // the way out.
 use super::shooting_star_fxframe::{self as fx, Frame, Value};
 use super::shooting_star_glsl as glsl;
+use super::shooting_star_hzfx as hzfx;
 use crate::gfx::native_render::WorldDrawn;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,8 +30,20 @@ const BLOOM_LEVELS: usize = 5;
 
 /// One of the original's fx shaders (`star_beam.fsh`), as the game read it.
 fn source(name: &str) -> Option<&'static str> {
+    if let Some((_, own)) = OWN_PROGRAMS.iter().find(|(file, _)| *file == name) {
+        return Some(own);
+    }
     fx::asset(&format!("fx/{name}")).and_then(|b| std::str::from_utf8(b).ok())
 }
+
+/// The port's own fx programs (not the original's): written for Horizon,
+/// in the original's dialect so they share its `common.glsl` and chain.
+const OWN_PROGRAMS: &[(&str, &str)] = &[
+    ("hz_glow.fsh", hzfx::GLOW),
+    ("hz_shock.fsh", hzfx::SHOCK),
+    ("hz_streak.fsh", hzfx::STREAK),
+    ("hz_horizon.fsh", hzfx::HORIZON),
+];
 
 /// One of the original's textures (`moonfall/earth_day.jpg`).
 fn texture_bytes(name: &str) -> Option<&'static [u8]> {
@@ -128,6 +141,8 @@ struct Targets {
     up: Vec<Target>,
     out: Target,
     black: Target,
+    /// The bloom with its streaks.
+    streak: Target,
 }
 
 struct State {
@@ -152,6 +167,8 @@ struct State {
     /// Gravitia's machine: not tried yet, or read (None when it cannot be).
     mesh: Option<Option<MeshPass>>,
     mesh_targets: Option<MeshTargets>,
+    /// How far the warm-up got through `warm_list`.
+    warmed: usize,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -212,6 +229,7 @@ impl Targets {
             down,
             up,
             out: target(device, "Shooting Star result", size, HDR, none),
+            streak: target(device, "Shooting Star streaks", [(fx_size[0] >> 1).max(1), (fx_size[1] >> 1).max(1)], HDR, none),
             black: target(device, "Shooting Star black", [1, 1], HDR, none),
         }
     }
@@ -347,6 +365,7 @@ impl State {
             stepped: None,
             mesh: None,
             mesh_targets: None,
+            warmed: 0,
         })
     }
 
@@ -552,16 +571,27 @@ fn common_values(block: &mut glsl::Block<'_>, world: &WorldDrawn<'_>, out_size: 
 
 /// The `world_drawn` hook: the spells' passes over the world.
 pub fn draw(world: &mut WorldDrawn<'_>) {
-    let Some(frame) = fx::current() else { return };
+    let frame = fx::current();
     let mut guard = match STATE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
+    if frame.is_none() && guard.as_ref().is_some_and(|s| s.warmed >= warm_list().len()) {
+        return;
+    }
+    // Nothing to warm before the original's files are read.
+    if frame.is_none() && fx::asset("fx/composite.fsh").is_none() {
+        return;
+    }
     let raw_format = world.color.format();
     if guard.as_ref().is_none_or(|s| s.frame_format != world.color_format || s.raw_format != raw_format) {
         *guard = State::new(world.device, world.color_format, raw_format);
     }
     let Some(state) = guard.as_mut() else { return };
+    let Some(frame) = frame else {
+        warm(state, world);
+        return;
+    };
     if !world.color.usage().contains(wgpu::TextureUsages::COPY_SRC) {
         if !state.warned {
             state.warned = true;
@@ -572,11 +602,57 @@ pub fn draw(world: &mut WorldDrawn<'_>) {
     run(state, world, &frame);
 }
 
+/// What the warm-up readies, one a frame from the world's first: every
+/// program, every texture and the machine, so a spell's first cast does not
+/// stall on its shaders.
+fn warm_list() -> &'static [&'static str] {
+    static LIST: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| {
+        let mut list: Vec<&'static str> = vec!["composite", "bloom_down", "bloom_up"];
+        list.extend(OWN_PROGRAMS.iter().map(|(name, _)| name.strip_suffix(".fsh").unwrap_or(name)));
+        for file in fx::ASSET_FILES {
+            if let Some(name) = file.strip_prefix("fx/").and_then(|f| f.strip_suffix(".fsh"))
+                && !list.contains(&name)
+            {
+                list.push(name);
+            }
+        }
+        list.extend(fx::ASSET_FILES.iter().filter(|f| f.ends_with(".jpg")).copied());
+        list.push("models/gravitia/machine.bin");
+        list
+    })
+}
+
+fn warm(state: &mut State, world: &mut WorldDrawn<'_>) {
+    let Some(item) = warm_list().get(state.warmed).copied() else { return };
+    state.warmed += 1;
+    if let Some(file) = item.strip_prefix("textures/") {
+        state.texture(world.device, world.queue, file);
+    } else if item.ends_with(".bin") {
+        if state.mesh.is_none() {
+            state.mesh = Some(mesh_pass(world.device));
+        }
+    } else {
+        state.program(world.device, item);
+    }
+    if state.warmed == warm_list().len() {
+        log::info!("[shooting_star] the effects are warmed up");
+    }
+}
+
 fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
     let device = world.device;
     let queue = world.queue;
     let size = world.size;
-    let scale = (PIXEL_BUDGET / (f64::from(size[0]) * f64::from(size[1])).max(1.0)).sqrt().min(1.0);
+    // The quality setting: low draws the passes at 720p's pixels at most,
+    // medium 1080p's, high the original's budget, ultra at full size.
+    let budget = match frame.quality {
+        0 => 921_600.0,
+        1 => 2_073_600.0,
+        3 => f64::INFINITY,
+        _ => PIXEL_BUDGET,
+    };
+    let scale = (budget / (f64::from(size[0]) * f64::from(size[1])).max(1.0)).sqrt().min(1.0);
     let fx_size = [((f64::from(size[0]) * scale) as u32).max(2), ((f64::from(size[1]) * scale) as u32).max(2)];
     if state.targets.as_ref().is_none_or(|t| t.size != size || t.fx_size != fx_size) {
         state.targets = Some(Targets::new(device, size, fx_size, state.raw_format));
@@ -597,7 +673,7 @@ fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
 
     // Programs and textures first: they need `state` mutably.
     let mut wanted: Vec<&'static str> = frame.passes.iter().map(|p| p.program).collect();
-    wanted.extend(["bloom_down", "bloom_up", "composite"]);
+    wanted.extend(["bloom_down", "bloom_up", "composite", "hz_streak"]);
     for name in wanted {
         state.program(device, name);
     }
@@ -607,7 +683,7 @@ fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
         }
     }
     // A uniform buffer for each draw: the passes, the bloom's and the composite.
-    for i in 0..frame.passes.len() + 2 * BLOOM_LEVELS + 2 {
+    for i in 0..frame.passes.len() + 2 * BLOOM_LEVELS + 3 {
         state.buffer(device, i, 4096);
     }
     let Some(targets) = state.targets.as_ref() else { return };
@@ -658,6 +734,10 @@ fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
     let mut ping = 0;
     let mut drew = false;
     for pass in &frame.passes {
+        // Low quality keeps to the original's own passes.
+        if frame.quality == 0 && matches!(pass.program, "hz_glow" | "hz_shock") {
+            continue;
+        }
         let Some(program) = state.programs.get(pass.program).and_then(Option::as_ref) else { continue };
         let mut block = glsl::Block::new(&program.layout);
         common_values(&mut block, world, fx_size, frame.time);
@@ -725,6 +805,20 @@ fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
             source_size = targets.up[i].size;
         }
         bloom = Some(source);
+        // Anamorphic streaks out of the brightest light (high and ultra).
+        if frame.quality >= 2
+            && let Some(streak) = state.programs.get("hz_streak").and_then(Option::as_ref)
+        {
+            let mut block = glsl::Block::new(&streak.layout);
+            common_values(&mut block, world, targets.streak.size, frame.time);
+            let small = &targets.down[1.min(BLOOM_LEVELS - 1)];
+            block.set("TexelSize", &[1.0 / small.size[0] as f32, 1.0 / small.size[1] as f32]);
+            block.set("Strength", &[(screen.bloom * if frame.quality >= 3 { 0.5 } else { 0.35 }).min(1.0)]);
+            let inputs = Inputs { diffuse: source, aux: &small.view, named: Vec::new() };
+            draw_program(state, world, streak, &block, &inputs, &targets.depth.view, &targets.black.view, &targets.streak.view, buffer_index);
+            buffer_index += 1;
+            bloom = Some(&targets.streak.view);
+        }
     }
 
     // The composite, onto a picture of the frame's size, then onto the frame.

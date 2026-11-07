@@ -1,4 +1,4 @@
-// The Stellar Remote's five skills, as the original 1.5.2 defines them: their
+// The Stellar Remote's skills: the original 1.5.2's five, as it defines them, and the port's own: their
 // names, colours, timelines, recharges and tuning ranges, the shapes both
 // halves need (the beam's width, Gungnir's shock front, the Dipper's stars,
 // the Tesseract's grid) and the messages the two halves trade.
@@ -7,7 +7,7 @@
 // sounds and light in `shooting_star`. Both read this table, so a timeline is
 // written once and the two halves cannot drift apart.
 
-/// The five skills, in the remote's order.
+/// The skills, in the remote's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Skill {
     ShootingStar,
@@ -15,7 +15,12 @@ pub enum Skill {
     SevenStars,
     Tesseract,
     Gravitia,
+    /// The port's own: not one of the original's (see `original`).
+    EventHorizon,
 }
+
+/// How many skills the remote has.
+pub const SKILLS: usize = 6;
 
 /// A skill's power slider (`magic.Power` in the original): a range, where it
 /// starts, and whether it moves on a log scale.
@@ -172,15 +177,21 @@ pub fn damage_step(damage: f32) -> usize {
 }
 
 impl Skill {
-    pub const ALL: [Skill; 5] = [
+    pub const ALL: [Skill; SKILLS] = [
         Skill::ShootingStar,
         Skill::Gungnir,
         Skill::SevenStars,
         Skill::Tesseract,
         Skill::Gravitia,
+        Skill::EventHorizon,
     ];
     /// The ids of the original's lang file, keys and textures.
-    pub const IDS: [&'static str; 5] = ["the_shooting_star", "gungnir", "seven_stars", "tesseract", "gravitia"];
+    pub const IDS: [&'static str; SKILLS] = ["the_shooting_star", "gungnir", "seven_stars", "tesseract", "gravitia", "event_horizon"];
+
+    /// The original's own skill (false for the port's additions).
+    pub fn original(self) -> bool {
+        self != Skill::EventHorizon
+    }
 
     pub fn id(self) -> &'static str {
         Self::IDS[self.index() as usize]
@@ -193,6 +204,7 @@ impl Skill {
             Skill::SevenStars => 2,
             Skill::Tesseract => 3,
             Skill::Gravitia => 4,
+            Skill::EventHorizon => 5,
         }
     }
 
@@ -216,6 +228,7 @@ impl Skill {
             Skill::SevenStars => "SS-04 · Seven Stars",
             Skill::Tesseract => "SS-05 · Tesseract",
             Skill::Gravitia => "SS-06 · Gravitia",
+            Skill::EventHorizon => "SS-H1 · Event Horizon",
         }
     }
 
@@ -227,6 +240,7 @@ impl Skill {
             Skill::SevenStars => 0xB8A8FF,
             Skill::Tesseract => 0x7FF0FF,
             Skill::Gravitia => 0xB078FF,
+            Skill::EventHorizon => 0xFFA040,
         }
     }
 
@@ -239,6 +253,7 @@ impl Skill {
             Skill::Tesseract => 682,
             // The machine hangs in the sky for a hundred seconds after the drop.
             Skill::Gravitia => 2118,
+            Skill::EventHorizon => EH_END,
         }
     }
 
@@ -252,6 +267,8 @@ impl Skill {
             Skill::SevenStars => 1340,
             Skill::Tesseract => 1262,
             Skill::Gravitia => 2118,
+            // The rim cools for a minute.
+            Skill::EventHorizon => 1500,
         }
     }
 
@@ -264,6 +281,7 @@ impl Skill {
             Skill::Tesseract => 462,
             // The blow, under its white flash: the world is sent away unseen.
             Skill::Gravitia => 438,
+            Skill::EventHorizon => EH_FLASH,
         }
     }
 
@@ -295,6 +313,7 @@ impl Skill {
             Skill::SevenStars => Power { min: 0.1, max: 10.0, initial: 4.0, factor: true },
             Skill::Tesseract => Power { min: 0.05, max: 10.0, initial: 1.0, factor: true },
             Skill::Gravitia => Power { min: 1.0, max: 1.0, initial: 1.0, factor: false },
+            Skill::EventHorizon => Power { min: 0.25, max: 6.0, initial: 1.0, factor: true },
         }
     }
 
@@ -306,6 +325,7 @@ impl Skill {
             Skill::SevenStars => format!("power {}, the figure {:.0} blocks across", fmt_power(power), dipper_span(f64::from(power))),
             Skill::Tesseract => format!("power {}, the square {} blocks across", fmt_power(power), tess_zone(tess_scale(power))),
             Skill::Gravitia => "power 1, the whole world".to_owned(),
+            Skill::EventHorizon => format!("power {}, a hole {:.0} blocks across", fmt_power(power), eh_radius(power) * 2.0),
         }
     }
 
@@ -318,6 +338,7 @@ impl Skill {
             Skill::SevenStars => "key.keyboard.u",
             Skill::Tesseract => "key.keyboard.y",
             Skill::Gravitia => "key.keyboard.o",
+            Skill::EventHorizon => "key.keyboard.b",
         }
     }
 
@@ -330,6 +351,7 @@ impl Skill {
             Skill::SevenStars => dipper_span(p) + 400.0,
             Skill::Tesseract => f64::from(tess_zone(tess_scale(power))) * 0.75 + 400.0,
             Skill::Gravitia => 1.0e9,
+            Skill::EventHorizon => eh_radius(power) * 6.0 + 400.0,
         };
         range.max(512.0)
     }
@@ -342,6 +364,7 @@ impl Skill {
             Skill::SevenStars => "Projects the Big Dipper constellation onto the terrain. Seven orbital stars bombard each node in sequence, carving glowing trenches and searing the constellation into the earth.",
             Skill::Tesseract => "Summons a fourth-dimensional hypercube over a gridded zone. Severs the terrain and lifts 64 cubic cells into the sky in folding waves, leaving tiered bedrock pits.",
             Skill::Gravitia => "Deploys a planetary ring engine that shatters the world and banishes it into Imaginary Space, reconstructing reality as an endless geometric city in the void.",
+            Skill::EventHorizon => "Compresses a satellite into a micro black hole and drops it on the target. Light bends round it, its accretion disk tears the land into orbit, and it evaporates in a white flash, leaving a perfect sphere of emptiness rimmed with molten obsidian.",
         }
     }
 
@@ -527,6 +550,52 @@ pub fn tess_lift(seed: u64, i: i32, j: i32, scale: f64) -> i32 {
 
 // ---- the messages ------------------------------------------------------------------------------------------------
 
+// ---- SS-H1 Event Horizon (the port's own) -----------------------------------------------------------------------
+//
+// A satellite crushed to a micro black hole falls on the target: it settles
+// a little over the ground, its accretion disk spins up and tears the land
+// into orbit, the hole eats a sphere of the world, then evaporates in a
+// white flash and leaves the sphere empty, its rim fused to obsidian.
+
+/// The hole appears high over the target and starts to fall.
+pub const EH_DROP: i32 = 70;
+/// It settles over the ground.
+pub const EH_LAND: i32 = 130;
+/// The disk is spun up; the sphere is eaten outward from here.
+pub const EH_FEED: i32 = 160;
+/// The sphere is eaten whole.
+pub const EH_FULL: i32 = 300;
+/// The hole shrinks to nothing.
+pub const EH_COLLAPSE: i32 = 330;
+/// It evaporates: the flash.
+pub const EH_FLASH: i32 = 346;
+pub const EH_END: i32 = 560;
+
+/// The sphere's radius at a power.
+pub fn eh_radius(power: f32) -> f64 {
+    (14.0 * f64::from(power).sqrt()).clamp(6.0, 48.0)
+}
+
+/// Where the hole sits once it has settled: a quarter of its sphere over the ground.
+pub fn eh_center(target: [f64; 3], power: f32) -> [f64; 3] {
+    [target[0], target[1] + eh_radius(power) * 0.25, target[2]]
+}
+
+/// How much of the sphere is eaten (0 to 1), by tick.
+pub fn eh_eaten(t: f64) -> f64 {
+    let k = ((t - f64::from(EH_FEED)) / f64::from(EH_FULL - EH_FEED)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
+
+/// The hole's centre at a tick: high over the target, falling, settled.
+pub fn eh_hole(target: [f64; 3], power: f32, t: f64) -> [f64; 3] {
+    let c = eh_center(target, power);
+    let k = ((t - f64::from(EH_DROP)) / f64::from(EH_LAND - EH_DROP)).clamp(0.0, 1.0);
+    // Faster and faster, braking hard at the end.
+    let fall = k * k * (3.0 - 2.0 * k) * 0.3 + (1.0 - (1.0 - k).powi(3)) * 0.7;
+    [c[0], c[1] + 220.0 * (1.0 - fall), c[2]]
+}
+
 /// The window to the server.
 pub const CMD_SELECT: u8 = 2;
 pub const CMD_TUNE: u8 = 4;
@@ -595,10 +664,10 @@ pub fn decode_start(data: &[u8]) -> Option<Start> {
 }
 
 /// The window's tuning of every skill: `[TUNE, n, n x (power, damage, speed)]`.
-pub fn encode_tunes(tunes: &[Tuning; 5]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + 12 * 5);
+pub fn encode_tunes(tunes: &[Tuning; SKILLS]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + 12 * SKILLS);
     out.push(CMD_TUNE);
-    out.push(5);
+    out.push(SKILLS as u8);
     for tune in tunes {
         out.extend_from_slice(&tune.power.to_le_bytes());
         out.extend_from_slice(&tune.damage.to_le_bytes());
@@ -607,13 +676,15 @@ pub fn encode_tunes(tunes: &[Tuning; 5]) -> Vec<u8> {
     out
 }
 
-pub fn decode_tunes(data: &[u8]) -> Option<[Tuning; 5]> {
-    if data.len() < 2 + 12 * 5 || data[0] != CMD_TUNE || data[1] != 5 {
+pub fn decode_tunes(data: &[u8]) -> Option<[Tuning; SKILLS]> {
+    // An older window's five are read too: the rest keep their defaults.
+    let n = usize::from(*data.get(1)?);
+    if data[0] != CMD_TUNE || n < 5 || data.len() < 2 + 12 * n {
         return None;
     }
     let word = |at: usize| f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
-    let mut tunes = [Tuning::initial(Skill::ShootingStar); 5];
-    for (i, skill) in Skill::ALL.iter().enumerate() {
+    let mut tunes = Skill::ALL.map(Tuning::initial);
+    for (i, skill) in Skill::ALL.iter().enumerate().take(n) {
         let at = 2 + i * 12;
         tunes[i] = Tuning { power: word(at), damage: word(at + 4), speed: word(at + 8) }.clamped(*skill);
     }
@@ -621,10 +692,10 @@ pub fn decode_tunes(data: &[u8]) -> Option<[Tuning; 5]> {
 }
 
 /// The recharges, as the server tells a player: `[STATE, n, n x (left, total)]` in ticks.
-pub fn encode_state(left: &[(u32, u32); 5]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + 8 * 5);
+pub fn encode_state(left: &[(u32, u32); SKILLS]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + 8 * SKILLS);
     out.push(FX_STATE);
-    out.push(5);
+    out.push(SKILLS as u8);
     for (remaining, total) in left {
         out.extend_from_slice(&remaining.to_le_bytes());
         out.extend_from_slice(&total.to_le_bytes());
@@ -632,13 +703,14 @@ pub fn encode_state(left: &[(u32, u32); 5]) -> Vec<u8> {
     out
 }
 
-pub fn decode_state(data: &[u8]) -> Option<[(u32, u32); 5]> {
-    if data.len() < 2 + 8 * 5 || data[0] != FX_STATE || data[1] != 5 {
+pub fn decode_state(data: &[u8]) -> Option<[(u32, u32); SKILLS]> {
+    let n = usize::from(*data.get(1)?);
+    if data[0] != FX_STATE || n < 5 || data.len() < 2 + 8 * n {
         return None;
     }
     let word = |at: usize| u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
-    let mut out = [(0, 1); 5];
-    for (i, slot) in out.iter_mut().enumerate() {
+    let mut out = [(0, 1); SKILLS];
+    for (i, slot) in out.iter_mut().enumerate().take(n) {
         *slot = (word(2 + i * 8), word(6 + i * 8).max(1));
     }
     Some(out)
@@ -650,10 +722,12 @@ mod tests {
 
     #[test]
     fn the_skills_keep_the_originals_ids_and_order() {
-        assert_eq!(Skill::ALL.len(), 5);
+        assert_eq!(Skill::ALL.len(), 6);
         assert_eq!(Skill::ShootingStar.id(), "the_shooting_star");
         assert_eq!(Skill::by_id("seven_stars"), Some(Skill::SevenStars));
-        assert_eq!(Skill::Gravitia.next(), Skill::ShootingStar);
+        assert_eq!(Skill::Gravitia.next(), Skill::EventHorizon);
+        assert_eq!(Skill::EventHorizon.next(), Skill::ShootingStar);
+        assert!(Skill::ALL[..5].iter().all(|s| s.original()) && !Skill::EventHorizon.original());
     }
 
     #[test]
@@ -703,9 +777,9 @@ mod tests {
             speed: 1.5,
         };
         assert_eq!(decode_start(&encode_start(&start)), Some(start));
-        let tunes = [Tuning::initial(Skill::ShootingStar); 5];
+        let tunes = [Tuning::initial(Skill::ShootingStar); SKILLS];
         assert!(decode_tunes(&encode_tunes(&tunes)).is_some());
-        let state = [(10, 1200), (0, 1200), (0, 20), (5, 1200), (0, 1200)];
+        let state = [(10, 1200), (0, 1200), (0, 20), (5, 1200), (0, 1200), (7, 1200)];
         assert_eq!(decode_state(&encode_state(&state)), Some(state));
     }
 
