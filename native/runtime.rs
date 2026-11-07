@@ -508,7 +508,7 @@ pub fn client_tick(game: &mut super::Game<'_>) {
     direct(&spells, (bottom, bottom + height - 1));
     for spell in spells.iter_mut() {
         let until = (spell.clock + 1.0e-6).floor() as i32;
-        while spell.age <= until && spell.age <= spell.start.skill.duration() + 40 {
+        while spell.age <= until && spell.age <= spell.start.skill.fx_duration() {
             let t = spell.age;
             cue(game, spell, t, now);
             spell.age += 1;
@@ -516,7 +516,7 @@ pub fn client_tick(game: &mut super::Game<'_>) {
         spell.clock += f64::from(spell.start.speed);
         shockwave(game, spell);
     }
-    spells.retain(|s| s.age <= s.start.skill.duration() + 40);
+    spells.retain(|s| s.age <= s.start.skill.fx_duration());
     SPELLS.with(|s| {
         let mut s = s.borrow_mut();
         spells.append(&mut s);

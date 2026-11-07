@@ -242,6 +242,19 @@ impl Skill {
         }
     }
 
+    /// How long its light lasts in the window, in ticks at speed 1: longer
+    /// than the server's part (the original's `SpellFx.duration`): craters
+    /// cool, lava dims, the air settles.
+    pub fn fx_duration(self) -> i32 {
+        match self {
+            Skill::ShootingStar => 1386,
+            Skill::Gungnir => 1222,
+            Skill::SevenStars => 1340,
+            Skill::Tesseract => 1262,
+            Skill::Gravitia => 2118,
+        }
+    }
+
     /// The tick its blow lands: the film ends here.
     pub fn impact(self) -> i32 {
         match self {
