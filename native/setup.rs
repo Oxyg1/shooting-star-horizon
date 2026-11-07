@@ -63,10 +63,36 @@ const OWN: &[(&str, &[u8])] = &[
     ("data/shooting_star_demo/horizon/block/star_core.json", data!("content/data/shooting_star_demo/horizon/block/star_core.json")),
     ("data/shooting_star_demo/horizon/block/star_trace.json", data!("content/data/shooting_star_demo/horizon/block/star_trace.json")),
     ("data/shooting_star_demo/horizon/item/stellar_remote.json", data!("content/data/shooting_star_demo/horizon/item/stellar_remote.json")),
+    // The port's own sounds (`tools/sounds/synth.py`), in a namespace of their own.
+    ("assets/ss_port/lang/en_us.json", data!("content/assets/ss_port/lang/en_us.json")),
+    ("assets/ss_port/sounds.json", data!("content/assets/ss_port/sounds.json")),
+    ("assets/ss_port/sounds/eh_arm.ogg", data!("content/assets/ss_port/sounds/eh_arm.ogg")),
+    ("assets/ss_port/sounds/eh_collapse.ogg", data!("content/assets/ss_port/sounds/eh_collapse.ogg")),
+    ("assets/ss_port/sounds/eh_crush.ogg", data!("content/assets/ss_port/sounds/eh_crush.ogg")),
+    ("assets/ss_port/sounds/eh_fall.ogg", data!("content/assets/ss_port/sounds/eh_fall.ogg")),
+    ("assets/ss_port/sounds/eh_feed.ogg", data!("content/assets/ss_port/sounds/eh_feed.ogg")),
+    ("assets/ss_port/sounds/eh_flash.ogg", data!("content/assets/ss_port/sounds/eh_flash.ogg")),
+    ("assets/ss_port/sounds/eh_land.ogg", data!("content/assets/ss_port/sounds/eh_land.ogg")),
+    ("assets/ss_port/sounds/eh_rim.ogg", data!("content/assets/ss_port/sounds/eh_rim.ogg")),
+    ("assets/ss_port/sounds/eh_tear.ogg", data!("content/assets/ss_port/sounds/eh_tear.ogg")),
+    ("assets/ss_port/sounds/sn_arm.ogg", data!("content/assets/ss_port/sounds/sn_arm.ogg")),
+    ("assets/ss_port/sounds/sn_blast.ogg", data!("content/assets/ss_port/sounds/sn_blast.ogg")),
+    ("assets/ss_port/sounds/sn_burn.ogg", data!("content/assets/ss_port/sounds/sn_burn.ogg")),
+    ("assets/ss_port/sounds/sn_dawn.ogg", data!("content/assets/ss_port/sounds/sn_dawn.ogg")),
+    ("assets/ss_port/sounds/sn_ignite.ogg", data!("content/assets/ss_port/sounds/sn_ignite.ogg")),
+    ("assets/ss_port/sounds/sn_implode.ogg", data!("content/assets/ss_port/sounds/sn_implode.ogg")),
+    ("assets/ss_port/sounds/sn_swell.ogg", data!("content/assets/ss_port/sounds/sn_swell.ogg")),
+    ("assets/ss_port/sounds/sn_wave.ogg", data!("content/assets/ss_port/sounds/sn_wave.ogg")),
+    ("assets/ss_port/version.txt", data!("content/assets/ss_port/version.txt")),
     // SS-H1's card: the port's own picture.
     (
         "assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png",
         data!("content/assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png"),
+    ),
+    // SS-H2's card.
+    (
+        "assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/supernova.png",
+        data!("content/assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/supernova.png"),
     ),
 ];
 
@@ -114,8 +140,16 @@ pub fn ready(game_dir: &Path) -> bool {
     // hz9 added Gravitia's machine and hz10 SS-H1's card: an older content
     // mod is built again (from the jars already kept, nothing is downloaded).
     let card = content_dir(game_dir).join("assets/shooting_star_demo/textures/gui/sprites/skill/stellar_remote/event_horizon.png");
-    data.join("fx").join("composite.fsh").is_file() && data.join("models").join("gravitia").join("machine.bin").is_file() && card.is_file()
+    // The port's own files carry their version: new sounds or pictures rebuild it.
+    let own = std::fs::read_to_string(content_dir(game_dir).join("assets/ss_port/version.txt")).unwrap_or_default();
+    data.join("fx").join("composite.fsh").is_file()
+        && data.join("models").join("gravitia").join("machine.bin").is_file()
+        && card.is_file()
+        && own.trim() == OWN_VERSION
 }
+
+/// The version of the port's own content files (`assets/ss_port/version.txt`).
+const OWN_VERSION: &str = "hz11";
 
 /// Its films' tables are there.
 pub fn films_ready(game_dir: &Path) -> bool {

@@ -538,6 +538,7 @@ pub fn of(start: &sk::Start, nodes: Option<[V; 7]>, heights: (i32, i32)) -> Opti
         Skill::Tesseract => Some(super::shooting_star_tesseract::cutscene(super::shooting_star_tesseract::Square::new(start, heights.0, heights.1))),
         Skill::Gravitia => Some(super::shooting_star_gravitia::cutscene()),
         Skill::EventHorizon => Some(super::shooting_star_horizon::cutscene(start)),
+        Skill::Supernova => Some(super::shooting_star_nova::cutscene(start)),
     }
 }
 

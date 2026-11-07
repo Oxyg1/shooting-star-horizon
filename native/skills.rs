@@ -17,10 +17,12 @@ pub enum Skill {
     Gravitia,
     /// The port's own: not one of the original's (see `original`).
     EventHorizon,
+    /// The port's own too.
+    Supernova,
 }
 
 /// How many skills the remote has.
-pub const SKILLS: usize = 6;
+pub const SKILLS: usize = 7;
 
 /// A skill's power slider (`magic.Power` in the original): a range, where it
 /// starts, and whether it moves on a log scale.
@@ -184,13 +186,14 @@ impl Skill {
         Skill::Tesseract,
         Skill::Gravitia,
         Skill::EventHorizon,
+        Skill::Supernova,
     ];
     /// The ids of the original's lang file, keys and textures.
-    pub const IDS: [&'static str; SKILLS] = ["the_shooting_star", "gungnir", "seven_stars", "tesseract", "gravitia", "event_horizon"];
+    pub const IDS: [&'static str; SKILLS] = ["the_shooting_star", "gungnir", "seven_stars", "tesseract", "gravitia", "event_horizon", "supernova"];
 
     /// The original's own skill (false for the port's additions).
     pub fn original(self) -> bool {
-        self != Skill::EventHorizon
+        !matches!(self, Skill::EventHorizon | Skill::Supernova)
     }
 
     pub fn id(self) -> &'static str {
@@ -205,6 +208,7 @@ impl Skill {
             Skill::Tesseract => 3,
             Skill::Gravitia => 4,
             Skill::EventHorizon => 5,
+            Skill::Supernova => 6,
         }
     }
 
@@ -229,6 +233,7 @@ impl Skill {
             Skill::Tesseract => "SS-05 · Tesseract",
             Skill::Gravitia => "SS-06 · Gravitia",
             Skill::EventHorizon => "SS-H1 · Event Horizon",
+            Skill::Supernova => "SS-H2 · Supernova",
         }
     }
 
@@ -241,6 +246,7 @@ impl Skill {
             Skill::Tesseract => 0x7FF0FF,
             Skill::Gravitia => 0xB078FF,
             Skill::EventHorizon => 0xFFA040,
+            Skill::Supernova => 0x9FD8FF,
         }
     }
 
@@ -254,6 +260,7 @@ impl Skill {
             // The machine hangs in the sky for a hundred seconds after the drop.
             Skill::Gravitia => 2118,
             Skill::EventHorizon => EH_END,
+            Skill::Supernova => SN_END,
         }
     }
 
@@ -269,6 +276,8 @@ impl Skill {
             Skill::Gravitia => 2118,
             // The rim cools for a minute.
             Skill::EventHorizon => 1500,
+            // The night stays day for a minute; the remnant fades.
+            Skill::Supernova => 1600,
         }
     }
 
@@ -282,6 +291,7 @@ impl Skill {
             // The blow, under its white flash: the world is sent away unseen.
             Skill::Gravitia => 438,
             Skill::EventHorizon => EH_FLASH,
+            Skill::Supernova => SN_BLAST,
         }
     }
 
@@ -314,6 +324,7 @@ impl Skill {
             Skill::Tesseract => Power { min: 0.05, max: 10.0, initial: 1.0, factor: true },
             Skill::Gravitia => Power { min: 1.0, max: 1.0, initial: 1.0, factor: false },
             Skill::EventHorizon => Power { min: 0.25, max: 6.0, initial: 1.0, factor: true },
+            Skill::Supernova => Power { min: 0.25, max: 10.0, initial: 1.0, factor: true },
         }
     }
 
@@ -326,6 +337,7 @@ impl Skill {
             Skill::Tesseract => format!("power {}, the square {} blocks across", fmt_power(power), tess_zone(tess_scale(power))),
             Skill::Gravitia => "power 1, the whole world".to_owned(),
             Skill::EventHorizon => format!("power {}, a hole {:.0} blocks across", fmt_power(power), eh_radius(power) * 2.0),
+            Skill::Supernova => format!("power {}, the land burnt {:.0} blocks round", fmt_power(power), sn_radius(power)),
         }
     }
 
@@ -339,6 +351,7 @@ impl Skill {
             Skill::Tesseract => "key.keyboard.y",
             Skill::Gravitia => "key.keyboard.o",
             Skill::EventHorizon => "key.keyboard.b",
+            Skill::Supernova => "key.keyboard.v",
         }
     }
 
@@ -352,6 +365,8 @@ impl Skill {
             Skill::Tesseract => f64::from(tess_zone(tess_scale(power))) * 0.75 + 400.0,
             Skill::Gravitia => 1.0e9,
             Skill::EventHorizon => eh_radius(power) * 6.0 + 400.0,
+            // The star hangs 300 blocks up: it is seen from far.
+            Skill::Supernova => sn_radius(power) * 3.0 + 900.0,
         };
         range.max(512.0)
     }
@@ -364,6 +379,7 @@ impl Skill {
             Skill::SevenStars => "Projects the Big Dipper constellation onto the terrain. Seven orbital stars bombard each node in sequence, carving glowing trenches and searing the constellation into the earth.",
             Skill::Tesseract => "Summons a fourth-dimensional hypercube over a gridded zone. Severs the terrain and lifts 64 cubic cells into the sky in folding waves, leaving tiered bedrock pits.",
             Skill::Gravitia => "Deploys a planetary ring engine that shatters the world and banishes it into Imaginary Space, reconstructing reality as an endless geometric city in the void.",
+            Skill::Supernova => "Lights a star high over the target. It swells into a red giant, falls in on itself and explodes: the night turns to day, the shock front sweeps the ground in a ring, burning grass to ash and sand to glass, and the remnant glows in the sky for a minute.",
             Skill::EventHorizon => "Compresses a satellite into a micro black hole and drops it on the target. Light bends round it, its accretion disk tears the land into orbit, and it evaporates in a white flash, leaving a perfect sphere of emptiness rimmed with molten obsidian.",
         }
     }
@@ -596,9 +612,54 @@ pub fn eh_hole(target: [f64; 3], power: f32, t: f64) -> [f64; 3] {
     [c[0], c[1] + 220.0 * (1.0 - fall), c[2]]
 }
 
+// ---- SS-H2 Supernova (the port's own) ---------------------------------------------------------------------------
+//
+// A star is lit 300 blocks over the target, swells into a red giant, falls
+// in on itself and explodes; the blast reaches the ground and its front
+// sweeps out in a ring, burning the land as it goes.
+
+/// The star is lit.
+pub const SN_LIGHT: i32 = 30;
+/// It starts to swell.
+pub const SN_SWELL: i32 = 60;
+/// At its largest: it starts to fall in.
+pub const SN_PEAK: i32 = 220;
+/// It explodes.
+pub const SN_BLAST: i32 = 250;
+/// The blast reaches the ground under it.
+pub const SN_HIT: i32 = 262;
+pub const SN_END: i32 = 420;
+/// How high over the target the star hangs.
+pub const SN_HEIGHT: f64 = 300.0;
+
+/// How far the ground burns round the target.
+pub fn sn_radius(power: f32) -> f64 {
+    (90.0 * f64::from(power).sqrt()).clamp(30.0, 280.0)
+}
+
+pub fn sn_star(target: [f64; 3]) -> [f64; 3] {
+    [target[0], target[1] + SN_HEIGHT, target[2]]
+}
+
+/// Ticks the ground front takes to reach its edge.
+pub fn sn_ring_ticks(power: f32) -> f64 {
+    20.0 + sn_radius(power) / 3.0
+}
+
+/// The ground front's radius at a tick (0 before it lands), fast at first, slowing.
+pub fn sn_ring(t: f64, power: f32) -> f64 {
+    let k = ((t - f64::from(SN_HIT)) / sn_ring_ticks(power)).clamp(0.0, 1.0);
+    if t < f64::from(SN_HIT) {
+        return 0.0;
+    }
+    sn_radius(power) * (1.0 - (1.0 - k).powf(1.8))
+}
+
 /// The window to the server.
 pub const CMD_SELECT: u8 = 2;
 pub const CMD_TUNE: u8 = 4;
+/// The window's switches: `[FLAGS, bits]`, bit 0 = spells may change blocks.
+pub const CMD_FLAGS: u8 = 9;
 /// The server to the window.
 pub const FX_STATE: u8 = 3;
 pub const FX_START: u8 = 5;
@@ -722,12 +783,13 @@ mod tests {
 
     #[test]
     fn the_skills_keep_the_originals_ids_and_order() {
-        assert_eq!(Skill::ALL.len(), 6);
+        assert_eq!(Skill::ALL.len(), 7);
         assert_eq!(Skill::ShootingStar.id(), "the_shooting_star");
         assert_eq!(Skill::by_id("seven_stars"), Some(Skill::SevenStars));
         assert_eq!(Skill::Gravitia.next(), Skill::EventHorizon);
-        assert_eq!(Skill::EventHorizon.next(), Skill::ShootingStar);
-        assert!(Skill::ALL[..5].iter().all(|s| s.original()) && !Skill::EventHorizon.original());
+        assert_eq!(Skill::EventHorizon.next(), Skill::Supernova);
+        assert_eq!(Skill::Supernova.next(), Skill::ShootingStar);
+        assert!(Skill::ALL[..5].iter().all(|s| s.original()) && !Skill::EventHorizon.original() && !Skill::Supernova.original());
     }
 
     #[test]
@@ -779,7 +841,7 @@ mod tests {
         assert_eq!(decode_start(&encode_start(&start)), Some(start));
         let tunes = [Tuning::initial(Skill::ShootingStar); SKILLS];
         assert!(decode_tunes(&encode_tunes(&tunes)).is_some());
-        let state = [(10, 1200), (0, 1200), (0, 20), (5, 1200), (0, 1200), (7, 1200)];
+        let state = [(10, 1200), (0, 1200), (0, 20), (5, 1200), (0, 1200), (7, 1200), (3, 1200)];
         assert_eq!(decode_state(&encode_state(&state)), Some(state));
     }
 

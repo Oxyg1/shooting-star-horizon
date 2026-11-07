@@ -13,14 +13,14 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz10";
+pub const VERSION: &str = "1.5.2-hz11";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
 pub const REMOTE_ID: &str = "shooting_star_demo:stellar_remote";
 
 /// The command usages the mod adds to the server's tree.
-pub const COMMANDS: &[&str] = &["tss info", "tss cast <skill:word>", "tss select <skill:word>", "tss next"];
+pub const COMMANDS: &[&str] = &["tss info", "tss cast <skill:word>", "tss select <skill:word>", "tss next", "tss undo"];
 
 /// The server to the window, and the window to the server.
 pub const CHANNEL: &str = "shooting_star:fx";
@@ -30,7 +30,7 @@ pub const CH_CMD: &str = "shooting_star:cmd";
 /// first seven are the original's (H menu, J cutscenes, K I U Y skills; O
 /// for Gravitia), then the port's own SS-H1 on B; the tuning keys stand in
 /// for its menu's sliders.
-pub const KEYS: [(&str, &str, &str); 12] = [
+pub const KEYS: [(&str, &str, &str); 13] = [
     ("skill_menu", "Open skill menu", "key.keyboard.h"),
     ("cutscenes", "Skip / toggle spell cutscenes", "key.keyboard.j"),
     ("the_shooting_star", "The Shooting Star: SS-01 Railgun", "key.keyboard.k"),
@@ -39,6 +39,7 @@ pub const KEYS: [(&str, &str, &str); 12] = [
     ("tesseract", "The Shooting Star: SS-05 Tesseract", "key.keyboard.y"),
     ("gravitia", "The Shooting Star: SS-06 Gravitia", "key.keyboard.o"),
     ("event_horizon", "The Shooting Star: SS-H1 Event Horizon (the port's own)", "key.keyboard.b"),
+    ("supernova", "The Shooting Star: SS-H2 Supernova (the port's own)", "key.keyboard.v"),
     ("cycle", "Next skill", "key.keyboard.g"),
     ("power", "Selected skill: power (Shift: down)", "key.keyboard.n"),
     ("speed", "Selected skill: speed (Shift: down)", "key.keyboard.m"),
@@ -56,6 +57,8 @@ thread_local! {
     static SELECTED: std::cell::Cell<Skill> = const { std::cell::Cell::new(Skill::ShootingStar) };
     static TUNES: std::cell::RefCell<[Tuning; sk::SKILLS]> = std::cell::RefCell::new(Skill::ALL.map(Tuning::initial));
     static CUTSCENES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether this player's spells may change blocks (safe mode when off).
+    static TERRAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// The effects' quality: 0 low, 1 medium, 2 high (the default), 3 ultra.
     static QUALITY: std::cell::Cell<u8> = const { std::cell::Cell::new(2) };
     static LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -117,6 +120,8 @@ fn load(game: &super::Game<'_>) {
         let (key, value) = (key.trim(), value.trim());
         if key == "cutscenes" {
             CUTSCENES.with(|c| c.set(value != "false"));
+        } else if key == "terrain" {
+            TERRAIN.with(|c| c.set(value != "false"));
         } else if key == "quality" {
             if let Some(q) = QUALITIES.iter().position(|n| *n == value) {
                 QUALITY.with(|c| c.set(q as u8));
@@ -149,6 +154,7 @@ fn save(game: &super::Game<'_>) {
     }
     let mut out = String::from("# The Shooting Star (Demo): the remote's skills\n");
     out.push_str(&format!("cutscenes={}\n", CUTSCENES.with(std::cell::Cell::get)));
+    out.push_str(&format!("terrain={}\n", TERRAIN.with(std::cell::Cell::get)));
     out.push_str(&format!("selected={}\n", selected().id()));
     out.push_str(&format!("quality={}\n", QUALITIES[usize::from(quality())]));
     for skill in Skill::ALL {
@@ -503,7 +509,9 @@ pub fn client_tick(game: &mut super::Game<'_>) {
         let tunes = TUNES.with(|t| *t.borrow());
         let a = game.native_net_send_to_server(CH_CMD, &[sk::CMD_SELECT, selected().index()]);
         let b = game.native_net_send_to_server(CH_CMD, &sk::encode_tunes(&tunes));
-        if a.is_ok() && b.is_ok() {
+        let flags = u8::from(TERRAIN.with(std::cell::Cell::get));
+        let c = game.native_net_send_to_server(CH_CMD, &[sk::CMD_FLAGS, flags]);
+        if a.is_ok() && b.is_ok() && c.is_ok() {
             DIRTY.with(|d| d.set(false));
         }
     }
@@ -526,6 +534,7 @@ pub fn client_tick(game: &mut super::Game<'_>) {
         spell.clock += f64::from(spell.start.speed);
         shockwave(game, spell);
         pull(game, spell);
+        nova_wave(game, spell, now);
     }
     spells.retain(|s| s.age <= s.start.skill.fx_duration());
     SPELLS.with(|s| {
@@ -544,6 +553,7 @@ fn zone_of(start: &sk::Start) -> f64 {
         Skill::Tesseract => f64::from(sk::tess_zone(sk::tess_scale(start.power))) * 0.5,
         Skill::Gravitia => 1.0e7,
         Skill::EventHorizon => sk::eh_radius(start.power),
+        Skill::Supernova => sk::sn_radius(start.power),
     }
 }
 
@@ -898,73 +908,134 @@ fn cue(game: &mut super::Game<'_>, spell: &mut ClientSpell, t: i32, now: u64) {
             let _ = caster;
         }
         Skill::EventHorizon => event_horizon_cue(game, &start, film, cam, t, now),
+        Skill::Supernova => supernova_cue(game, &start, film, cam, t, now),
     }
 }
 
-/// A vanilla sound (the port's own spell has no score of the original's):
-/// in the head during the film, out in the world else, carrying `reach` blocks.
-fn vanilla(game: &mut super::Game<'_>, film: bool, name: &str, at: [f64; 3], reach: f32, pitch: f32) {
-    if film {
-        if game.native_window() {
-            game.audio.play(name, None, 1.0, pitch);
-        }
+/// The port's own score (`ss_port:*`, made by `tools/sounds/synth.py`):
+/// heard in the head, as the original's Gravitia score is, louder the nearer
+/// the camera is to `at` (full within `near` blocks, gone past `far`).
+fn score(game: &mut super::Game<'_>, film: bool, name: &str, cam: [f64; 3], at: [f64; 3], near: f64, far: f64) {
+    if !game.native_window() {
         return;
     }
-    game.native_play_local_sound(name, at, (reach / 16.0).max(1.0), pitch, 0);
+    let d = ((cam[0] - at[0]).powi(2) + (cam[1] - at[1]).powi(2) + (cam[2] - at[2]).powi(2)).sqrt();
+    let v = if film { 1.0 } else { (1.0 - (d - near) / (far - near).max(1.0)).clamp(0.0, 1.0) as f32 };
+    if v > 0.01 {
+        game.audio.play(&format!("ss_port:{name}"), None, v, 1.0);
+    }
 }
 
-/// SS-H1's sound: a low hum as it falls, the ground's groan as it feeds,
-/// a heartbeat that quickens, a breath of silence, and the flash.
+/// One of the port's own sounds out in the world, carrying `reach` blocks.
+fn spot(game: &mut super::Game<'_>, name: &str, at: [f64; 3], reach: f32, pitch: f32) {
+    game.native_play_local_sound(&format!("ss_port:{name}"), at, (reach / 16.0).max(1.0), pitch, 0);
+}
+
+/// SS-H1's sound: the remote arming, the satellite crushed, the fall, the
+/// landing, the feeding swelling for nine seconds, the collapse cut off into
+/// silence, and the flash.
 fn event_horizon_cue(game: &mut super::Game<'_>, start: &sk::Start, film: bool, cam: [f64; 3], t: i32, now: u64) {
     let radius = sk::eh_radius(start.power);
     let hole = sk::eh_hole(start.target, start.power, f64::from(t));
-    let ear = ear(cam, hole, radius);
-    let reach = (radius * 8.0 + 320.0) as f32;
-    let mut s = |name: &str, pitch: f32| vanilla(game, film, name, ear, reach, pitch);
-    match t {
-        9 => s("minecraft:block.beacon.activate", 0.5),
-        40 => s("minecraft:block.end_portal.spawn", 0.55),
-        70 => s("minecraft:entity.elder_guardian.curse", 0.5),
-        130 => {
-            s("minecraft:entity.warden.sonic_boom", 0.5);
-            s("minecraft:entity.generic.explode", 0.5);
-        }
-        160 => s("minecraft:block.conduit.activate", 0.5),
-        200 | 250 => s("minecraft:block.respawn_anchor.charge", 0.5),
-        300 => s("minecraft:block.beacon.deactivate", 0.5),
-        312 => s("minecraft:block.sculk_shrieker.shriek", 0.5),
-        t if t == sk::EH_FLASH => {
-            s("minecraft:item.trident.thunder", 0.6);
-            s("minecraft:entity.warden.sonic_boom", 0.8);
-            s("minecraft:entity.generic.explode", 0.6);
-            s("minecraft:entity.lightning_bolt.thunder", 0.7);
-        }
-        362 => s("minecraft:block.respawn_anchor.deplete", 0.5),
-        400 | 470 => s("minecraft:block.amethyst_block.resonate", 0.5),
-        _ => {}
+    let centre = sk::eh_center(start.target, start.power);
+    let (near, far) = (radius * 4.0 + 60.0, radius * 14.0 + 700.0);
+    let name = match t {
+        9 => Some("eh_arm"),
+        40 => Some("eh_crush"),
+        t if t == sk::EH_DROP => Some("eh_fall"),
+        t if t == sk::EH_LAND => Some("eh_land"),
+        150 => Some("eh_feed"),
+        t if t == sk::EH_COLLAPSE => Some("eh_collapse"),
+        t if t == sk::EH_FLASH => Some("eh_flash"),
+        _ => None,
+    };
+    if let Some(name) = name {
+        // The flash is heard from much further off.
+        let far = if t == sk::EH_FLASH { far * 2.5 } else { far };
+        score(game, film, name, cam, hole, near, far);
     }
-    // The fall hums; the feeding groans.
-    if (70..130).contains(&t) && t % 12 == 0 {
-        s("minecraft:block.beacon.ambient", 0.5 + (t - 70) as f32 / 120.0);
+    // The land torn away round the hole, here and there.
+    if (sk::EH_FEED..sk::EH_COLLAPSE).contains(&t) && (t * 7 + (start.seed & 15) as i32) % 23 == 0 {
+        let a = (t as f64 * 2.399 + start.seed as f64).sin() * std::f64::consts::PI;
+        let r = radius * sk::eh_eaten(f64::from(t) + 10.0);
+        let at = [centre[0] + a.cos() * r, centre[1], centre[2] + a.sin() * r];
+        spot(game, "eh_tear", at, (radius * 6.0 + 96.0) as f32, 0.85 + 0.3 * ((t % 5) as f32 / 4.0));
     }
-    if (130..sk::EH_COLLAPSE).contains(&t) && t % 40 == 10 {
-        s("minecraft:block.portal.ambient", 0.5);
+    if t == sk::EH_FLASH + 30 || t == sk::EH_FLASH + 200 {
+        spot(game, "eh_rim", centre, (radius * 4.0 + 64.0) as f32, 1.0);
     }
-    // The heartbeat quickens toward the collapse.
-    if (150..sk::EH_COLLAPSE).contains(&t) {
-        let gap = 26 - (t - 150) * 16 / (sk::EH_COLLAPSE - 150);
-        if (t - 150) % gap.max(8) == 0 {
-            s("minecraft:entity.warden.heartbeat", 0.6);
-        }
-    }
-    if t == 130 {
-        jolt(hole, 1.0, radius * 10.0 + 300.0, now);
+    if t == sk::EH_LAND {
+        jolt(hole, 1.2, radius * 10.0 + 300.0, now);
     }
     if (sk::EH_FEED..sk::EH_COLLAPSE).contains(&t) && t % 10 == 0 {
-        jolt(hole, 0.25 + 0.3 * sk::eh_eaten(f64::from(t)) as f32, radius * 6.0 + 200.0, now);
+        jolt(hole, 0.25 + 0.35 * sk::eh_eaten(f64::from(t)) as f32, radius * 6.0 + 200.0, now);
     }
     if t == sk::EH_FLASH {
-        jolt(hole, 2.2, radius * 16.0 + 600.0, now);
+        jolt(hole, 2.4, radius * 16.0 + 600.0, now);
+    }
+}
+
+/// SS-H2's sound: the remote arming, the star lit, its nine-second swell, the
+/// fall into silence, the blast, and the dawn after.
+fn supernova_cue(game: &mut super::Game<'_>, start: &sk::Start, film: bool, cam: [f64; 3], t: i32, now: u64) {
+    let radius = sk::sn_radius(start.power);
+    let star = sk::sn_star(start.target);
+    let (near, far) = (sk::SN_HEIGHT + radius, sk::SN_HEIGHT * 3.0 + radius * 4.0 + 1200.0);
+    let name = match t {
+        9 => Some("sn_arm"),
+        t if t == sk::SN_LIGHT => Some("sn_ignite"),
+        t if t == sk::SN_SWELL + 2 => Some("sn_swell"),
+        t if t == sk::SN_PEAK => Some("sn_implode"),
+        t if t == sk::SN_BLAST => Some("sn_blast"),
+        t if t == sk::SN_BLAST + 50 => Some("sn_dawn"),
+        _ => None,
+    };
+    if let Some(name) = name {
+        let far = if t == sk::SN_BLAST { far * 2.0 } else { far };
+        score(game, film, name, cam, star, near, far);
+    }
+    if t == sk::SN_HIT + 12 {
+        spot(game, "sn_burn", start.target, (radius * 1.5 + 96.0) as f32, 1.0);
+    }
+    // The star's pulse throbs through the ground as it swells.
+    if (sk::SN_SWELL..sk::SN_PEAK).contains(&t) && t % 25 == 0 {
+        jolt(cam, 0.15 + 0.35 * (t - sk::SN_SWELL) as f32 / (sk::SN_PEAK - sk::SN_SWELL) as f32, 1.0e9, now);
+    }
+    if t == sk::SN_BLAST {
+        jolt(cam, 1.2, 1.0e9, now);
+    }
+    if t == sk::SN_HIT {
+        jolt(start.target, 2.0, radius * 3.0 + 200.0, now);
+    }
+}
+
+/// The Supernova's ground front reaching the player: the wind and grit of it
+/// going by, a jolt, and a shove outward and up.
+fn nova_wave(game: &mut super::Game<'_>, spell: &mut ClientSpell, now: u64) {
+    if spell.start.skill != Skill::Supernova || spell.pushed || spell.age < sk::SN_HIT {
+        return;
+    }
+    let Some(player) = game.native_player() else { return };
+    let radius = sk::sn_radius(spell.start.power);
+    let (dx, dz) = spell.target_dx(player.x, player.z);
+    let d = dx.hypot(dz);
+    let front = sk::sn_ring(f64::from(spell.age), spell.start.power);
+    if d > radius * 1.15 + 8.0 {
+        spell.pushed = true;
+        return;
+    }
+    if front + 2.0 < d && front < radius * 0.999 {
+        return;
+    }
+    spell.pushed = true;
+    let at = [player.x, player.y + 1.0, player.z];
+    if game.native_window() {
+        game.audio.play("ss_port:sn_wave", None, 1.0, 1.0);
+    }
+    jolt(at, 1.6, 64.0, now);
+    if !spell.start.mine && d > 1.0 {
+        let k = (1.0 - d / (radius * 1.15 + 8.0)).clamp(0.2, 1.0);
+        game.native_push_player([(dx / d * 1.6 * k) as f32, (0.5 + 0.6 * k) as f32, (dz / d * 1.6 * k) as f32]);
     }
 }
 
@@ -1087,6 +1158,7 @@ enum Spot {
     Films,
     Reset,
     Quality,
+    Terrain,
 }
 
 struct Menu {
@@ -1101,6 +1173,7 @@ struct Menu {
     films: [f32; 4],
     reset: [f32; 4],
     quality: [f32; 4],
+    terrain: [f32; 4],
 }
 
 fn layout(width: f32, height: f32) -> Menu {
@@ -1132,7 +1205,7 @@ fn layout(width: f32, height: f32) -> Menu {
         up[i] = [rx + rw - 16.0, ry + 1.0, 15.0, 13.0];
     }
     let by = rows_y + 3.0 * 17.0 + 4.0;
-    let bw = ((rw - 12.0) / 4.0).floor();
+    let bw = ((rw - 16.0) / 5.0).floor();
     // As tall as what is in it, with the hint's line under it.
     let fit = (top + n * row_h).max(by + 15.0) + 20.0 - y;
     Menu {
@@ -1147,6 +1220,7 @@ fn layout(width: f32, height: f32) -> Menu {
         films: [rx + bw + 4.0, by, bw, 15.0],
         reset: [rx + 2.0 * (bw + 4.0), by, bw, 15.0],
         quality: [rx + 3.0 * (bw + 4.0), by, bw, 15.0],
+        terrain: [rx + 4.0 * (bw + 4.0), by, bw, 15.0],
     }
 }
 
@@ -1170,7 +1244,7 @@ impl Menu {
                 return Some(Spot::Row(*knob));
             }
         }
-        [(self.key, Spot::Key), (self.films, Spot::Films), (self.reset, Spot::Reset), (self.quality, Spot::Quality)].into_iter().find(|(r, _)| inside(*r, p)).map(|(_, s)| s)
+        [(self.key, Spot::Key), (self.films, Spot::Films), (self.reset, Spot::Reset), (self.quality, Spot::Quality), (self.terrain, Spot::Terrain)].into_iter().find(|(r, _)| inside(*r, p)).map(|(_, s)| s)
     }
 }
 
@@ -1225,6 +1299,7 @@ fn banner_sprite(skill: Skill) -> &'static str {
         Skill::Gravitia => "shooting_star_demo:gui/sprites/skill/stellar_remote/gravitia",
         // The port's own picture, made for it.
         Skill::EventHorizon => "shooting_star_demo:gui/sprites/skill/stellar_remote/event_horizon",
+        Skill::Supernova => "shooting_star_demo:gui/sprites/skill/stellar_remote/supernova",
     }
 }
 
@@ -1386,6 +1461,8 @@ pub fn menu_render(game: &super::Game<'_>, batch: &mut crate::hud::HudBatch, scr
     let films = CUTSCENES.with(std::cell::Cell::get);
     button(batch, atlas, m.films, if films { "Films: On" } else { "Films: Off" }, accent, hot == Some(Spot::Films), false);
     button(batch, atlas, m.reset, "Reset", accent, hot == Some(Spot::Reset), false);
+    let land = TERRAIN.with(std::cell::Cell::get);
+    button(batch, atlas, m.terrain, if land { "Land: On" } else { "Land: Off" }, accent, hot == Some(Spot::Terrain), false);
     let q = ["FX: Low", "FX: Med", "FX: High", "FX: Ultra"][usize::from(quality())];
     button(batch, atlas, m.quality, q, accent, hot == Some(Spot::Quality), false);
 
@@ -1400,6 +1477,7 @@ pub fn menu_render(game: &super::Game<'_>, batch: &mut crate::hud::HudBatch, scr
             Some(Spot::Films) => "The cutscenes in space; the cutscene key skips one".to_owned(),
             Some(Spot::Reset) => "Power, damage and speed back to the original's".to_owned(),
             Some(Spot::Quality) => "Effects quality: Low and Med for weaker GPUs, Ultra draws at full resolution".to_owned(),
+            Some(Spot::Terrain) => "Off: spells change no blocks (effects and damage stay) · /tss undo restores the last spell's land".to_owned(),
             None => format!("↑↓ choose · ←→ power · {} closes", key_label(&mod_key(game, "skill_menu"))),
         }
     };
@@ -1432,6 +1510,12 @@ pub fn menu_click(game: &super::Game<'_>, screen: &super::NativeScreenView<'_>, 
         }
         Some(Spot::Films) => {
             CUTSCENES.with(|c| c.set(!c.get()));
+            save(game);
+            ui_sound("ws_bound", 1.0);
+        }
+        Some(Spot::Terrain) => {
+            TERRAIN.with(|c| c.set(!c.get()));
+            DIRTY.with(|d| d.set(true));
             save(game);
             ui_sound("ws_bound", 1.0);
         }
@@ -1768,7 +1852,11 @@ pub fn perform(game: &mut super::Game<'_>, command: &str) -> Result<String, ()> 
             }
             None => "Only a player has a remote".to_owned(),
         },
-        _ => "Usage: /tss <info|cast|select|next>".to_owned(),
+        Some("undo") => match game.native_acting_player() {
+            Some(player) => super::shooting_star_spells::undo(game, player.uuid),
+            None => "Only a player can undo".to_owned(),
+        },
+        _ => "Usage: /tss <info|cast|select|next|undo>".to_owned(),
     };
     Ok(answer)
 }

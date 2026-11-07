@@ -194,7 +194,28 @@ vec3 rd = viewDir(uv);
 vec3 surf = scenePosAt(uv);
 bool sky = skyAt(uv);
 float sceneT = sky ? FAR : length(surf);
-vec3 col = base;
+// The light of the whole place drains toward it while it feeds.
+float feeding = diskK * (1.0 - collapse);
+float dim = 1.0 - 0.22 * min(feeding, 1.0);
+vec3 col = base * dim;
+// Light dragged in: round the hole the picture smears toward it.
+if (rs > 0.01 && feeding > 0.01) {
+vec3 hc = project(Center);
+if (hc.z > 0.0) {
+float aspect = OutSize.x / OutSize.y;
+vec2 to = hc.xy - uv;
+float dist = length(to * vec2(aspect, 1.0));
+float reach = rs * 40.0 / max(hc.z, 1.0);
+float k = feeding * smoothstep(reach * 2.2, reach * 0.4, dist) * 0.06;
+if (k > 0.0005) {
+vec3 acc = vec3(0.0);
+for (int i = 0; i < 8; i++) {
+acc += sampleScene(uv + to * k * float(i) / 7.0);
+}
+col = mix(col, acc / 8.0 * dim, smoothstep(0.0, 0.01, k));
+}
+}
+}
 
 // The marks on the ground: the target's rings, the molten edge of what is
 // eaten, the fused rim cooling.
@@ -304,6 +325,11 @@ vec3 dir = normalize(v);
 float on = sky ? 600.0 : max(sceneT - travelled, 4.0);
 vec3 pr = project(Center + pos + dir * on);
 behind = pr.z > 0.0 ? sampleScene(pr.xy) : base * 0.2;
+// Light climbing out of the well comes out redder and dimmer.
+float tc0;
+float b0 = rayPointDist(vec3(0.0), rd, Center, tc0);
+float well = exp(-max(b0 - rs * 2.6, 0.0) / (rs * 2.5));
+behind *= mix(vec3(1.0), vec3(0.9, 0.35, 0.22), well) * dim;
 }
 // The bending fades out toward the edge of its reach, that it has no seam.
 float tc;
@@ -328,6 +354,21 @@ float inside = 1.0 - smoothstep(flashR * 0.6, flashR, b);
 float seen = tc - flashR < sceneT ? 1.0 : 0.3;
 col += (vec3(1.0, 0.95, 0.88) * shell * 2.2 + vec3(1.0, 0.75, 0.5) * inside * 0.8) * flash * seen;
 }
+// While it feeds, two faint jets flicker out of its poles.
+if (feeding > 0.05 && rs > 0.01) {
+for (int s = 0; s < 2; s++) {
+vec3 tip = Center + axis * (s == 0 ? 1.0 : -1.0) * (R * 3.0 + 40.0);
+float tr;
+float b = raySegmentDist(vec3(0.0), rd, Center + axis * (s == 0 ? 1.0 : -1.0) * rs * 3.0, tip, tr);
+if (tr < sceneT) {
+vec3 q = rd * tr - Center;
+float along = abs(dot(q, axis)) / (R * 3.0 + 40.0);
+float flick = 0.55 + 0.45 * vnoise2(vec2(along * 12.0 - sec * 9.0, float(s) * 7.0 + seed * 10.0));
+float width = rs * (0.35 + along * 1.6);
+col += vec3(0.5, 0.68, 1.0) * exp(-b / width) * flick * (1.0 - along) * feeding * 0.6;
+}
+}
+}
 if (jet > 0.001) {
 for (int s = 0; s < 2; s++) {
 vec3 tip = Center + axis * (s == 0 ? 1.0 : -1.0) * (40.0 + 400.0 * jet);
@@ -337,6 +378,199 @@ if (tr < sceneT) {
 col += vec3(0.85, 0.9, 1.0) * exp(-b / (1.2 + R * 0.06)) * 3.0 * (1.0 - jet * 0.7);
 }
 }
+}
+fragColor = vec4(col, 1.0);
+}
+"#;
+
+pub const NOVA: &str = r#"
+#include "common.glsl"
+
+uniform vec3 Star;
+uniform vec3 Ground;
+uniform float Seed;
+
+vec3 starColor(float temp) {
+vec3 blue = vec3(0.62, 0.78, 1.0);
+vec3 white = vec3(1.0, 0.96, 0.88);
+vec3 yellow = vec3(1.0, 0.78, 0.42);
+vec3 red = vec3(1.0, 0.38, 0.16);
+if (temp < 0.333) {
+return mix(blue, white, temp / 0.333);
+}
+if (temp < 0.666) {
+return mix(white, yellow, (temp - 0.333) / 0.333);
+}
+return mix(yellow, red, (temp - 0.666) / 0.334);
+}
+
+void main() {
+vec2 uv = texCoord;
+vec3 base = sampleScene(uv);
+float starR = P0.x;
+float temp = P0.y;
+float sec = P0.z;
+float pulse = P0.w;
+float shellR = P1.x;
+float shellK = P1.y;
+float ringR = P1.z;
+float ringK = P1.w;
+float burnR = P2.x;
+float dayK = P2.y;
+float nebK = P2.z;
+float ember = P2.w;
+float R = P3.x;
+float implode = P3.y;
+float flash = P3.z;
+float glint = P3.w;
+float aspect = OutSize.x / OutSize.y;
+vec3 rd = viewDir(uv);
+vec3 surf = scenePosAt(uv);
+bool sky = skyAt(uv);
+float sceneT = sky ? FAR : length(surf);
+vec3 col = base;
+
+// The night made day: the sky pale blue, the land lit.
+if (dayK > 0.001) {
+if (sky) {
+vec3 day = mix(vec3(0.42, 0.62, 0.95), vec3(0.82, 0.88, 0.98), pow(1.0 - max(rd.y, 0.0), 3.0));
+col = mix(col, day * 1.15, dayK * 0.85);
+} else {
+col *= 1.0 + dayK * 0.3;
+}
+}
+
+// The burnt land: darkened, its embers glowing out.
+if (!sky && burnR > 0.5) {
+vec3 p = surf - Ground;
+float fl = length(p.xz);
+float k = (1.0 - smoothstep(burnR - 2.0, burnR + 1.0, fl)) * (1.0 - smoothstep(20.0, 60.0, abs(p.y)));
+if (k > 0.0) {
+float inner = 1.0 - smoothstep(0.0, 0.3, fl / max(R, 1.0));
+col = mix(col, col * vec3(0.5, 0.42, 0.38), k * (0.5 + 0.3 * inner) * (1.0 - dayK * 0.4));
+float e = smoothstep(0.7, 0.93, vnoise2(p.xz * 0.9 + vec2(Seed * 50.0)));
+float flick = 0.7 + 0.3 * sin(sec * 5.0 + p.x * 0.7 + p.z * 0.3);
+col += vec3(1.0, 0.34, 0.07) * e * k * ember * flick * 1.6;
+}
+}
+
+// The front on the ground, and the wall of dust it drives.
+if (ringK > 0.001 && ringR > 0.5) {
+if (!sky) {
+vec3 p = surf - Ground;
+float fl = length(p.xz);
+float band = exp(-abs(fl - ringR) / 2.2) * (1.0 - smoothstep(12.0, 50.0, abs(p.y)));
+float lead = exp(-max(fl - ringR, 0.0) / 1.2) * step(ringR - 1.0, fl);
+col += vec3(1.0, 0.8, 0.55) * (band * 2.4 + lead * 1.2) * ringK;
+}
+vec2 hc = rayCylinderY(vec3(0.0), rd, Ground, ringR);
+float H = 6.0 + ringR * 0.07;
+for (int i = 0; i < 2; i++) {
+float tw = i == 0 ? hc.x : hc.y;
+if (tw > 0.0 && tw < sceneT) {
+vec3 q = rd * tw - Ground;
+float h = q.y;
+if (h > -6.0 && h < H) {
+float a = atan(q.z, q.x);
+float n = vnoise2(vec2(a * ringR * 0.25, h * 0.35 - sec * 3.0));
+float dens = pow(1.0 - saturate(h / H), 1.6) * (0.5 + 0.6 * n) * smoothstep(-6.0, 0.0, h);
+vec3 dust = mix(vec3(0.62, 0.52, 0.42), vec3(1.0, 0.72, 0.42), exp(-max(h, 0.0) / 3.0));
+col = mix(col, dust * (1.0 + dayK * 0.4), saturate(dens * 0.55 * ringK));
+}
+}
+}
+}
+
+// The remnant: a nebula round where the star was, its pulsar turning.
+if (nebK > 0.001 && shellR > 1.0) {
+float tc;
+float b = rayPointDist(vec3(0.0), rd, Star, tc);
+float nr = shellR;
+if (b < nr * 1.3 && (sky || tc - nr < sceneT)) {
+vec3 dir = normalize(rd * tc - Star + vec3(0.001));
+float n1 = fbm3(dir * 3.0 + vec3(Seed * 9.0));
+float n2 = fbm3(dir * 7.0 + vec3(3.1, Seed * 4.0, 1.7));
+float shape = smoothstep(nr * 1.25, nr * 0.25, b);
+vec3 c = mix(vec3(0.18, 0.78, 0.8), vec3(1.0, 0.3, 0.48), smoothstep(0.35, 0.65, n2));
+c = mix(c, vec3(1.0, 0.78, 0.42), smoothstep(0.62, 0.8, n1) * 0.6);
+float lit = smoothstep(0.38, 0.72, n1) * shape;
+col += c * lit * nebK * (sky ? 0.9 : 0.35) * (1.0 - dayK * 0.45);
+}
+// The pulsar: a point and its two sweeping beams.
+vec3 bd = normalize(vec3(cos(sec * 3.2), 0.4, sin(sec * 3.2)));
+float tr;
+float bb = raySegmentDist(vec3(0.0), rd, Star - bd * nr * 0.9, Star + bd * nr * 0.9, tr);
+if (tr < sceneT) {
+col += vec3(0.7, 0.85, 1.0) * exp(-bb / (0.8 + nr * 0.004)) * nebK * 0.35;
+}
+float tp;
+float bp = rayPointDist(vec3(0.0), rd, Star, tp);
+if (tp < sceneT) {
+col += vec3(0.85, 0.92, 1.0) * exp(-bp / 2.0) * nebK * (0.6 + 0.4 * sin(sec * 30.0));
+}
+}
+
+// The shell of the blast going out.
+if (shellK > 0.001 && shellR > 0.5) {
+float tc;
+float b = rayPointDist(vec3(0.0), rd, Star, tc);
+if (b < shellR * 1.15) {
+float depth = sqrt(max(shellR * shellR - b * b, 0.0));
+if (sky || tc - depth < sceneT) {
+vec3 dir = normalize(rd * tc - Star + vec3(0.001));
+float fil = fbm3(dir * 6.0 + vec3(sec * 0.05, Seed * 3.0, 0.0));
+float r = b / shellR;
+float edge = exp(-abs(b - shellR) / (shellR * 0.05 + 1.0));
+float body = (1.0 - smoothstep(0.0, shellR, b)) * 0.12;
+// As the shell sweeps over the camera it is a flash, not a lasting white.
+float passing = smoothstep(0.0, 45.0, abs(length(Star) - shellR));
+vec3 c = mix(vec3(0.62, 0.86, 1.0), mix(vec3(0.25, 0.9, 0.85), vec3(1.0, 0.36, 0.3), smoothstep(0.7, 1.0, r)), smoothstep(0.3, 0.9, r));
+col += c * (edge * (0.6 + 1.6 * fil) + body * fil) * shellK * 2.2 * passing;
+}
+}
+}
+
+// The star: its face boiling, its corona, its streamers.
+if (starR > 0.0) {
+float tc;
+float b = rayPointDist(vec3(0.0), rd, Star, tc);
+if (sky || tc < sceneT) {
+vec3 sc = starColor(temp);
+if (b < starR) {
+vec3 hit = rd * (tc - sqrt(starR * starR - b * b)) - Star;
+vec3 n = normalize(hit);
+float mu = sqrt(max(1.0 - sqr(b / starR), 0.0));
+float gran = fbm3(n * (5.0 + temp * 7.0) + vec3(sec * 0.25, 0.0, sec * 0.1));
+float spots = smoothstep(0.6, 0.72, fbm3(n * 2.3 + vec3(Seed * 7.0)));
+vec3 face = sc * (0.5 + 1.0 * gran) * pow(mu, 0.55) * (1.0 - spots * 0.55 * temp) * (1.0 + pulse * 0.5);
+col = face * (1.25 + 4.0 * implode);
+}
+vec3 pc = project(Star);
+vec2 d2 = (uv - pc.xy) * vec2(aspect, 1.0);
+float ang = atan(d2.y, d2.x);
+float streamers = pow(vnoise2(vec2(ang * 9.0 + Seed * 20.0, sec * 0.35)), 3.0);
+float cor = exp(-max(b - starR, 0.0) / (starR * 0.45 + 0.6)) * step(starR * 0.98, b);
+float halo = exp(-max(b - starR, 0.0) / (starR * 2.5 + 3.0)) * 0.25;
+col += sc * (cor * (0.55 + streamers * 1.4) + halo * 0.6) * (0.9 + pulse * 0.8);
+}
+}
+
+// The glint: the point of light and its spikes, when it is small, and blinding as it goes.
+if (glint > 0.001) {
+vec3 pc = project(Star);
+if (pc.z > 0.0 && skyAt(clamp(pc.xy, 0.001, 0.999))) {
+vec2 d = (uv - pc.xy) * vec2(aspect, 1.0);
+float spikes = exp(-abs(d.y) * 500.0) * exp(-abs(d.x) * 5.0) + exp(-abs(d.x) * 500.0) * exp(-abs(d.y) * 7.0);
+float wide = exp(-abs(d.y) * 120.0) * exp(-abs(d.x) * 1.8) * 0.35;
+float core = exp(-length(d) * 55.0);
+vec3 g = mix(vec3(0.85, 0.92, 1.0), starColor(temp), 0.3);
+col += g * (spikes * 0.9 + wide + core * 2.5) * glint;
+}
+}
+if (flash > 0.001) {
+float tc;
+float b = rayPointDist(vec3(0.0), rd, Star, tc);
+col += vec3(0.9, 0.95, 1.0) * exp(-b / 60.0) * flash * 3.0;
 }
 fragColor = vec4(col, 1.0);
 }

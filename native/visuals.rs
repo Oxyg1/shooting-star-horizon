@@ -150,6 +150,7 @@ pub fn frame_in(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time
             Skill::Tesseract => tess(&mut frame, spell, camera, min_y, max_y),
             Skill::Gravitia => gravitia::frame(&mut frame, spell, camera, context.world, context.proj.as_ref()),
             Skill::EventHorizon => super::shooting_star_horizon::frame(&mut frame, spell, camera),
+            Skill::Supernova => super::shooting_star_nova::frame(&mut frame, spell, camera),
         }
     }
     extras(&mut frame, spells, camera, min_y);
@@ -190,7 +191,7 @@ fn rel(p: [f64; 3], camera: [f64; 3]) -> [f32; 3] {
 }
 
 /// Each spell's lights, fronts and heat.
-fn spell_extras(spell: &Spell, min_y: i32, lights: &mut Vec<Light>, shocks: &mut Vec<Front>, heat: &mut Vec<Front>) {
+fn spell_extras(spell: &Spell, camera: [f64; 3], min_y: i32, lights: &mut Vec<Light>, shocks: &mut Vec<Front>, heat: &mut Vec<Front>) {
     let t = spell.t;
     let start = &spell.start;
     let target = start.target;
@@ -273,6 +274,10 @@ fn spell_extras(spell: &Spell, min_y: i32, lights: &mut Vec<Light>, shocks: &mut
             super::shooting_star_horizon::lights(spell, lights);
             super::shooting_star_horizon::fronts(spell, shocks, heat);
         }
+        Skill::Supernova => {
+            super::shooting_star_nova::lights(spell, camera, lights);
+            super::shooting_star_nova::fronts(spell, shocks, heat);
+        }
     }
 }
 
@@ -283,10 +288,10 @@ fn extras(frame: &mut Frame, spells: &[Spell], camera: [f64; 3], min_y: i32) {
     let mut heat = Vec::new();
     for spell in spells {
         // A film in space has no world to light.
-        if spell.film.is_some_and(|f| f.weight > 0.5) && spell.start.skill != Skill::EventHorizon {
+        if spell.film.is_some_and(|f| f.weight > 0.5) && spell.start.skill.original() {
             continue;
         }
-        spell_extras(spell, min_y, &mut lights, &mut shocks, &mut heat);
+        spell_extras(spell, camera, min_y, &mut lights, &mut shocks, &mut heat);
     }
     let dist = |p: [f64; 3]| ((p[0] - camera[0]).powi(2) + (p[1] - camera[1]).powi(2) + (p[2] - camera[2]).powi(2)).sqrt() as f32;
     // The strongest and nearest first, as many as the passes take.

@@ -37,6 +37,8 @@ struct Remote {
     ready: [u64; sk::SKILLS],
     /// When the player was warned about Gravitia, for the second cast.
     confirm: Option<u64>,
+    /// Whether this player's spells may change blocks (the window's "Land").
+    terrain: bool,
 }
 
 impl Default for Remote {
@@ -46,6 +48,7 @@ impl Default for Remote {
             tunes: Skill::ALL.map(Tuning::initial),
             ready: [0; sk::SKILLS],
             confirm: None,
+            terrain: true,
         }
     }
 }
@@ -60,6 +63,12 @@ thread_local! {
     /// Chunks the carvings hold loaded right now.
     static HOLDS: Cell<usize> = const { Cell::new(0) };
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    /// The spell whose tick is running, so `apply` knows whose edit it is.
+    static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) };
+    /// The land each player's last spells changed, for `/tss undo`.
+    static JOURNALS: RefCell<HashMap<u128, Vec<Journal>>> = RefCell::new(HashMap::new());
+    /// The undos being carried out, a few chunks a tick.
+    static RESTORES: RefCell<Vec<Restore>> = const { RefCell::new(Vec::new()) };
 }
 
 fn now() -> u64 {
@@ -86,6 +95,8 @@ pub fn server_tick(game: &mut super::Game<'_>) {
     });
     if changed {
         SPELLS.with(|s| s.borrow_mut().clear());
+        JOURNALS.with(|j| j.borrow_mut().clear());
+        RESTORES.with(|r| r.borrow_mut().clear());
         REMOTES.with(|r| r.borrow_mut().clear());
         HOLDS.with(|h| h.set(0));
         city::open_world(world.as_deref());
@@ -117,6 +128,8 @@ pub fn on_client_message(player: u128, channel: &str, data: &[u8]) {
                 with_remote(player, |r| r.tunes = tunes);
             }
         }
+        // Bit 0: spells may change blocks. Older servers ignore this byte.
+        sk::CMD_FLAGS if data.len() >= 2 => with_remote(player, |r| r.terrain = data[1] & 1 != 0),
         _ => {}
     }
 }
@@ -213,6 +226,10 @@ pub fn cast(game: &mut super::Game<'_>, player: &super::NativeServerPlayer, skil
     let seed = spell_seed(player.uuid, t);
     let (min_y, height) = game.native_world_height();
     let mut spell = Spell::new(skill, player, target, seed, tune, min_y, min_y + height - 1);
+    spell.terrain = with_remote(player.uuid, |r| r.terrain);
+    if spell.terrain && skill != Skill::Gravitia {
+        open_journal(&spell);
+    }
     spell.ground_known = ground_known;
     log::info!(
         "[{ID}] {} cast by {} at {:.0} {:.0} {:.0}, power {}, speed {}",
@@ -348,6 +365,8 @@ struct Spell {
     player_hits: HashMap<u128, i32>,
     /// Whether the target's ground was read (its land may load later).
     ground_known: bool,
+    /// Whether the spell may change blocks (off in the caster's safe mode).
+    terrain: bool,
     /// The chunks round the target held loaded for the spell's whole life.
     held: Vec<[i32; 2]>,
     kind: Kind,
@@ -360,6 +379,7 @@ enum Kind {
     Tess(Box<TessState>),
     Grav,
     Hole(Box<HoleState>),
+    Nova(Box<NovaState>),
 }
 
 fn make_kind(skill: Skill, origin: [f64; 3], target: [f64; 3], seed: u64, tune: Tuning, min_y: i32) -> Kind {
@@ -370,6 +390,7 @@ fn make_kind(skill: Skill, origin: [f64; 3], target: [f64; 3], seed: u64, tune: 
         Skill::Tesseract => Kind::Tess(Box::new(TessState::new(target, tune.power, min_y))),
         Skill::Gravitia => Kind::Grav,
         Skill::EventHorizon => Kind::Hole(Box::new(HoleState::new(target, tune.power))),
+        Skill::Supernova => Kind::Nova(Box::new(NovaState { burnt: 0.0 })),
     }
 }
 
@@ -408,6 +429,7 @@ impl Spell {
             mob_hits: HashMap::new(),
             player_hits: HashMap::new(),
             ground_known: true,
+            terrain: true,
             held: Vec::new(),
             kind,
         }
@@ -459,14 +481,18 @@ pub fn level_tick(game: &mut super::Game<'_>, dimension: &str) {
         let until = (spell.clock + 1.0e-6).floor() as i32;
         while spell.age <= until && spell.age <= spell.skill.duration() {
             let t = spell.age;
+            enter(spell);
             on_tick(game, spell, caster.as_ref(), t);
+            leave();
             spell.age += 1;
         }
         spell.clock += f64::from(spell.tune.speed);
         if spell.age > spell.skill.duration() {
             // Lingering work, as `Carving.tickLingering`: the cut goes on
             // after the spell's own timeline ends.
+            enter(spell);
             after_end(game, spell);
+            leave();
         }
     }
     let mut kept = Vec::with_capacity(spells.len());
@@ -482,6 +508,7 @@ pub fn level_tick(game: &mut super::Game<'_>, dimension: &str) {
             for chunk in std::mem::take(&mut spell.held) {
                 release(game, &owner, chunk);
             }
+            close_journal(&spell);
             log::info!("[{ID}] {} has run its course", spell.skill.title());
             continue;
         }
@@ -492,6 +519,7 @@ pub fn level_tick(game: &mut super::Game<'_>, dimension: &str) {
         kept.append(&mut s);
         *s = kept;
     });
+    restore_tick(game, dimension);
     city::level_tick(game, dimension);
 }
 
@@ -538,6 +566,7 @@ fn on_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&super:
         Skill::Tesseract => tess_tick(game, spell, caster, t),
         Skill::Gravitia => grav_tick(game, spell, t),
         Skill::EventHorizon => hole_tick(game, spell, caster, t),
+        Skill::Supernova => nova_tick(game, spell, t),
     }
 }
 
@@ -1560,7 +1589,8 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
             }
         }
         // The top block of each, as the server has it.
-        let read = if picks.is_empty() {
+        // No debris from land that stays whole.
+        let read = if picks.is_empty() || !spell.terrain {
             None
         } else {
             game.native_read_columns(&dim, &picks, NativeHeightmap::MotionBlockingNoLeaves, (1, 0)).ok()
@@ -1680,6 +1710,167 @@ fn hole_rim(game: &mut super::Game<'_>, spell: &mut Spell) {
         }
     }
     paint(game, &dim, &blocks);
+}
+
+// ---- SS-H2 Supernova (the port's own) ---------------------------------------------------------------------------
+
+/// How far the ground front has burnt so far.
+struct NovaState {
+    burnt: f64,
+}
+
+/// A plant, a flower, a vine: what burns away whole.
+fn burns_away(block: &str) -> bool {
+    let b = block.trim_start_matches("minecraft:");
+    matches!(
+        b,
+        "short_grass" | "tall_grass" | "grass" | "fern" | "large_fern" | "dead_bush" | "bush" | "vine" | "glow_lichen" | "dandelion"
+            | "poppy" | "blue_orchid" | "allium" | "azure_bluet" | "oxeye_daisy" | "cornflower" | "lily_of_the_valley" | "sunflower"
+            | "lilac" | "rose_bush" | "peony" | "sweet_berry_bush" | "pink_petals" | "wildflowers" | "leaf_litter" | "firefly_bush"
+            | "short_dry_grass" | "tall_dry_grass" | "torchflower" | "pitcher_plant" | "spore_blossom" | "moss_carpet" | "snow"
+            | "brown_mushroom" | "red_mushroom" | "sugar_cane" | "bamboo" | "cactus" | "hanging_roots"
+    ) || b.ends_with("_tulip")
+        || b.ends_with("_sapling")
+        || b.ends_with("_leaves")
+}
+
+/// What the front leaves of a column's top block, `k` of the way out (0 the
+/// middle, 1 the edge), `roll` a die for it.
+fn burnt(block: &str, k: f64, roll: f64) -> Option<&'static str> {
+    let b = block.trim_start_matches("minecraft:");
+    let soil = matches!(b, "grass_block" | "podzol" | "mycelium" | "moss_block" | "dirt_path" | "farmland" | "rooted_dirt" | "pale_moss_block");
+    if k < 0.22 {
+        // Under the star: the land fused to glass, threaded with magma.
+        return match b {
+            "sand" | "gravel" | "suspicious_sand" | "suspicious_gravel" => Some(if roll < 0.8 { "minecraft:glass" } else { "minecraft:tinted_glass" }),
+            "red_sand" => Some("minecraft:orange_stained_glass"),
+            _ if soil || b == "dirt" || b == "coarse_dirt" || b == "clay" => Some(if roll < 0.42 {
+                "minecraft:glass"
+            } else if roll < 0.58 {
+                "minecraft:tinted_glass"
+            } else if roll < 0.75 {
+                "minecraft:magma_block"
+            } else {
+                "minecraft:smooth_basalt"
+            }),
+            "stone" | "andesite" | "diorite" | "granite" | "deepslate" | "tuff" => (roll < 0.3).then_some("minecraft:magma_block"),
+            "snow_block" | "powder_snow" => Some("minecraft:air"),
+            "ice" => Some("minecraft:water"),
+            _ => None,
+        };
+    }
+    if k < 0.7 {
+        return match b {
+            _ if soil => Some(if roll < 0.55 {
+                "minecraft:coarse_dirt"
+            } else if roll < 0.9 {
+                "minecraft:dirt"
+            } else if roll < 0.96 {
+                "minecraft:magma_block"
+            } else {
+                "minecraft:smooth_basalt"
+            }),
+            "sand" | "suspicious_sand" => (roll < 0.7).then_some("minecraft:glass"),
+            "red_sand" => (roll < 0.6).then_some("minecraft:orange_stained_glass"),
+            "snow_block" | "powder_snow" => Some("minecraft:air"),
+            "ice" => Some("minecraft:water"),
+            _ => None,
+        };
+    }
+    // The edge: singed.
+    let singe = 1.0 - (k - 0.7) / 0.3;
+    match b {
+        "grass_block" | "podzol" | "mycelium" if roll < 0.2 + 0.5 * singe => Some(if roll < 0.15 { "minecraft:coarse_dirt" } else { "minecraft:dirt" }),
+        "sand" if roll < 0.25 * singe => Some("minecraft:glass"),
+        _ => None,
+    }
+}
+
+fn nova_tick(game: &mut super::Game<'_>, spell: &mut Spell, t: i32) {
+    if t < sk::SN_HIT {
+        return;
+    }
+    let dim = spell.dimension.clone();
+    let power = spell.tune.power;
+    let radius = sk::sn_radius(power);
+    let front = sk::sn_ring(f64::from(t), power);
+    let target = spell.target;
+    // The living in the front's way: hurt and thrown outward.
+    if front > 0.0 && front < radius + 1.0 {
+        let (x, y, z) = (target[0], target[1], target[2]);
+        let band = |p: [f64; 3]| {
+            let d = (p[0] - x).hypot(p[2] - z);
+            d <= front + 1.5 && d >= front - 8.0 && (p[1] - y).abs() < 60.0
+        };
+        strike(game, spell, band, None, None);
+        for mob in game.native_mobs(&dim) {
+            let (dx, dz) = (mob.pos[0] - x, mob.pos[2] - z);
+            let d = dx.hypot(dz);
+            if band(mob.pos) && d > 0.5 {
+                game.native_push_mob(&dim, mob.id, [dx / d * 1.4, 0.6, dz / d * 1.4]);
+            }
+        }
+    }
+    let Kind::Nova(state) = &mut spell.kind else { return };
+    if front <= state.burnt + 0.5 && t < sk::SN_END {
+        return;
+    }
+    let from = state.burnt;
+    state.burnt = front;
+    if !spell.terrain {
+        return;
+    }
+    // The ring the front crossed this tick, read and burnt.
+    let (cx, cz) = (target[0], target[2]);
+    let ri = front.ceil() as i32 + 1;
+    let mut columns = Vec::new();
+    for x in (cx.floor() as i32 - ri)..=(cx.floor() as i32 + ri) {
+        for z in (cz.floor() as i32 - ri)..=(cz.floor() as i32 + ri) {
+            let d = (f64::from(x) + 0.5 - cx).hypot(f64::from(z) + 0.5 - cz);
+            if d >= from && d < front {
+                columns.push((x, z));
+            }
+        }
+    }
+    const DEPTH: u32 = 8;
+    let mut edit = Edit::default();
+    for batch in columns.chunks(8192) {
+        let Ok(read) = game.native_read_columns(&dim, batch, NativeHeightmap::WorldSurface, (DEPTH, 0)) else { continue };
+        for (i, &(x, z)) in batch.iter().enumerate() {
+            let Some(Some(base)) = read.bases.get(i).copied() else { continue };
+            let d = (f64::from(x) + 0.5 - cx).hypot(f64::from(z) + 0.5 - cz);
+            let k = d / radius;
+            let at = i * DEPTH as usize;
+            // From the top down: what burns away goes, the first solid block is burnt.
+            for j in (0..DEPTH as usize).rev() {
+                let Some(&index) = read.blocks.get(at + j) else { break };
+                let Some(name) = read.palette.get(usize::from(index)) else { break };
+                let block = name.split('[').next().unwrap_or("");
+                let y = base - DEPTH as i32 + j as i32;
+                if block.is_empty() || is_air(block) {
+                    continue;
+                }
+                let roll = sk::hash(spell.seed, i64::from(x) * 7 + i64::from(y), i64::from(z) * 13 - i64::from(y));
+                if burns_away(block) {
+                    let leaves = block.ends_with("_leaves");
+                    // At the edge some leaves and grass survive, singed.
+                    if !(leaves || k < 0.85 || roll < 0.75) || (leaves && k > 0.7 && roll > 0.55) {
+                        continue;
+                    }
+                    edit.column(x, z, y, 1, AIR);
+                    continue;
+                }
+                if block.contains("water") || block.contains("lava") || block.ends_with("_log") || block.ends_with("_wood") {
+                    break;
+                }
+                if let Some(to) = burnt(block, k, roll) {
+                    edit.column(x, z, y, 1, to);
+                }
+                break;
+            }
+        }
+    }
+    apply(game, &dim, &edit);
 }
 
 // ---- what a spell does to the living ----------------------------------------------------------------------------
@@ -2184,10 +2375,26 @@ impl Edit {
     }
 }
 
+/// Change blocks for the spell whose tick is running: nothing in its
+/// caster's safe mode, and what is overwritten goes in the undo journal first.
+/// Edits made outside a spell's tick (the city's) are neither.
 pub fn apply(game: &mut super::Game<'_>, dimension: &str, edit: &Edit) -> Option<u64> {
     if edit.is_empty() {
         return None;
     }
+    if let Some(context) = CONTEXT.with(|c| c.borrow().clone()) {
+        if !context.terrain {
+            return None;
+        }
+        if context.skill != Skill::Gravitia {
+            record(game, &context, dimension, edit);
+        }
+    }
+    apply_raw(game, dimension, edit)
+}
+
+/// The bulk edit itself, not journaled.
+fn apply_raw(game: &mut super::Game<'_>, dimension: &str, edit: &Edit) -> Option<u64> {
     let bulk = NativeBlockEdit {
         palette: edit.palette.clone(),
         filters: Vec::new(),
@@ -2200,6 +2407,353 @@ pub fn apply(game: &mut super::Game<'_>, dimension: &str, edit: &Edit) -> Option
             None
         }
     }
+}
+
+// ---- the undo journal ---------------------------------------------------------------------------------------------
+
+/// Who is editing: the spell whose tick is running.
+#[derive(Clone)]
+struct Context {
+    spell: u64,
+    caster: u128,
+    skill: Skill,
+    terrain: bool,
+}
+
+fn enter(spell: &Spell) {
+    CONTEXT.with(|c| {
+        *c.borrow_mut() = Some(Context { spell: spell.id, caster: spell.caster, skill: spell.skill, terrain: spell.terrain });
+    });
+}
+
+fn leave() {
+    CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
+/// The most spells of a player kept for `/tss undo`.
+const JOURNAL_KEEP: usize = 3;
+/// The chunks' worth of columns an undo puts back each tick.
+const RESTORE_CHUNKS: usize = 16;
+/// The ticks an undo waits for a chunk that is not loaded.
+const RESTORE_PATIENCE: u16 = 600;
+
+/// One stretch of a column: `len` blocks up from `y`, run-length encoded as
+/// (palette index, count).
+struct Segment {
+    y: i32,
+    len: u32,
+    runs: Vec<(u16, u16)>,
+}
+
+/// The blocks a spell overwrote, column by column, in a palette of their own.
+/// Block states are not kept (the game's reads name only the block), so
+/// stairs, logs and the like come back in their default orientation, and the
+/// contents of chests and other block entities are lost.
+#[derive(Default)]
+struct Land {
+    palette: Vec<String>,
+    columns: HashMap<(i32, i32), Vec<Segment>>,
+}
+
+impl Land {
+    fn intern(&mut self, block: &str) -> u16 {
+        if let Some(at) = self.palette.iter().position(|known| known == block) {
+            return at as u16;
+        }
+        self.palette.push(block.to_owned());
+        (self.palette.len() - 1) as u16
+    }
+
+    /// The parts of `a..b` in a column that are not recorded yet.
+    fn missing(&self, x: i32, z: i32, a: i32, b: i32) -> Vec<(i32, i32)> {
+        let mut gaps = vec![(a, b)];
+        for seg in self.columns.get(&(x, z)).map(Vec::as_slice).unwrap_or_default() {
+            let (s0, s1) = (seg.y, seg.y + seg.len as i32);
+            let mut next = Vec::with_capacity(gaps.len() + 1);
+            for (g0, g1) in gaps {
+                if s1 <= g0 || s0 >= g1 {
+                    next.push((g0, g1));
+                    continue;
+                }
+                if g0 < s0 {
+                    next.push((g0, s0));
+                }
+                if s1 < g1 {
+                    next.push((s1, g1));
+                }
+            }
+            gaps = next;
+        }
+        gaps
+    }
+
+    /// Keep `ids` (palette indices) for the blocks up from `y`. The caller
+    /// asks `missing` first: what is recorded is never written over.
+    fn store(&mut self, x: i32, z: i32, y: i32, ids: &[u16]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut runs: Vec<(u16, u16)> = Vec::new();
+        for &id in ids {
+            match runs.last_mut() {
+                Some((known, count)) if *known == id && *count < u16::MAX => *count += 1,
+                _ => runs.push((id, 1)),
+            }
+        }
+        let segs = self.columns.entry((x, z)).or_default();
+        if let Some(last) = segs.last_mut()
+            && last.y + last.len as i32 == y
+        {
+            last.len += ids.len() as u32;
+            last.runs.extend(runs);
+            return;
+        }
+        segs.push(Segment { y, len: ids.len() as u32, runs });
+    }
+
+    /// Record what `read` says is in `a..b` of a column, where the column's
+    /// first `row` entry is the block at `row_y`; air above the row.
+    fn record(&mut self, x: i32, z: i32, (a, b): (i32, i32), row_y: i32, row: &[u16], names: &[String]) {
+        let air = self.intern(AIR);
+        let mut remap: Vec<Option<u16>> = vec![None; names.len()];
+        for (ya, yb) in self.missing(x, z, a, b) {
+            let mut ids = Vec::with_capacity((yb - ya) as usize);
+            for y in ya..yb {
+                let id = match usize::try_from(y - row_y).ok().and_then(|k| row.get(k)) {
+                    Some(&read) => match remap.get_mut(usize::from(read)) {
+                        Some(slot) => *slot.get_or_insert_with(|| self.intern_name(names, read)),
+                        None => air,
+                    },
+                    None => air,
+                };
+                ids.push(id);
+            }
+            self.store(x, z, ya, &ids);
+        }
+    }
+
+    fn intern_name(&mut self, names: &[String], read: u16) -> u16 {
+        let name = names.get(usize::from(read)).map(String::as_str).unwrap_or(AIR);
+        self.intern(name)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
+    /// The runs of a column to write back: (y, blocks high, palette index).
+    fn runs(&self, x: i32, z: i32) -> Vec<(i32, u32, u16)> {
+        let mut out = Vec::new();
+        for seg in self.columns.get(&(x, z)).map(Vec::as_slice).unwrap_or_default() {
+            let mut y = seg.y;
+            for &(id, count) in &seg.runs {
+                out.push((y, u32::from(count), id));
+                y += i32::from(count);
+            }
+        }
+        out
+    }
+}
+
+/// A spell's journal.
+struct Journal {
+    spell: u64,
+    skill: Skill,
+    dimension: String,
+    done: bool,
+    land: Land,
+}
+
+fn open_journal(spell: &Spell) {
+    JOURNALS.with(|j| {
+        let mut all = j.borrow_mut();
+        let list = all.entry(spell.caster).or_default();
+        list.push(Journal { spell: spell.id, skill: spell.skill, dimension: spell.dimension.clone(), done: false, land: Land::default() });
+        // The oldest finished one goes; a spell still running never does.
+        while list.len() > JOURNAL_KEEP {
+            let Some(old) = list.iter().position(|journal| journal.done) else { break };
+            list.remove(old);
+        }
+    });
+}
+
+fn close_journal(spell: &Spell) {
+    JOURNALS.with(|j| {
+        if let Some(journal) = j.borrow_mut().get_mut(&spell.caster).and_then(|l| l.iter_mut().find(|j| j.spell == spell.id)) {
+            journal.done = true;
+        }
+    });
+}
+
+/// Keep the blocks `edit` is about to overwrite, those not kept before.
+fn record(game: &super::Game<'_>, context: &Context, dimension: &str, edit: &Edit) {
+    JOURNALS.with(|journals| {
+        let mut journals = journals.borrow_mut();
+        let Some(journal) = journals.get_mut(&context.caster).and_then(|l| l.iter_mut().find(|j| j.spell == context.spell)) else {
+            return;
+        };
+        let (min_y, height) = game.native_world_height();
+        let top = min_y + height;
+        let mut wanted: HashMap<(i32, i32), Vec<(i32, i32)>> = HashMap::new();
+        for run in &edit.runs {
+            let (a, b) = (run.y.max(min_y), run.y.saturating_add(run.height as i32).min(top));
+            if a < b && !journal.land.missing(run.x, run.z, a, b).is_empty() {
+                wanted.entry((run.x, run.z)).or_default().push((a, b));
+            }
+        }
+        let mut columns: Vec<(i32, i32)> = wanted.keys().copied().collect();
+        columns.sort_unstable();
+        for batch in columns.chunks(256) {
+            // Only as deep as the lowest block this edit writes (a burnt
+            // surface reads a few blocks, a beam the whole column).
+            let Ok(bases) = game.native_surface_heights(dimension, batch, NativeHeightmap::WorldSurface) else { continue };
+            let deepest = batch
+                .iter()
+                .zip(&bases)
+                .filter_map(|(c, base)| Some(base.as_ref()? - wanted[c].iter().map(|r| r.0).min()?))
+                .max()
+                .unwrap_or(0);
+            if deepest <= 0 {
+                // Everything written is over the ground: it was air.
+                for column in batch {
+                    for &range in &wanted[column] {
+                        journal.land.record(column.0, column.1, range, i32::MAX, &[], &[]);
+                    }
+                }
+                continue;
+            }
+            let below = deepest.min(height).max(1);
+            let rows = below as usize;
+            let read = match game.native_read_columns(dimension, batch, NativeHeightmap::WorldSurface, (below as u32, 0)) {
+                Ok(read) if read.bases.len() == batch.len() && read.blocks.len() == batch.len() * rows => read,
+                Ok(_) => continue,
+                Err(error) => {
+                    log::warn!("[{ID}] land for the undo could not be read: {error}");
+                    continue;
+                }
+            };
+            for (i, column) in batch.iter().enumerate() {
+                // Not loaded: the edit will not land either.
+                let Some(base) = read.bases[i] else { continue };
+                let row = &read.blocks[i * rows..(i + 1) * rows];
+                for &range in &wanted[column] {
+                    journal.land.record(column.0, column.1, range, base - below, row, &read.palette);
+                }
+            }
+        }
+    });
+}
+
+/// An undo being carried out: the chunks still to put back.
+struct Restore {
+    uuid: u128,
+    dimension: String,
+    title: &'static str,
+    palette: Vec<String>,
+    /// Chunks to restore, the next one last.
+    chunks: Vec<ChunkWork>,
+}
+
+struct ChunkWork {
+    chunk: [i32; 2],
+    columns: Vec<((i32, i32), Vec<Segment>)>,
+    tries: u16,
+}
+
+/// A land's columns grouped by chunk, the first to restore last.
+fn by_chunk(land: Land) -> (Vec<String>, Vec<ChunkWork>) {
+    let mut chunks: HashMap<[i32; 2], Vec<((i32, i32), Vec<Segment>)>> = HashMap::new();
+    for (column, segs) in land.columns {
+        chunks.entry([column.0 >> 4, column.1 >> 4]).or_default().push((column, segs));
+    }
+    let mut work: Vec<ChunkWork> = chunks.into_iter().map(|(chunk, columns)| ChunkWork { chunk, columns, tries: 0 }).collect();
+    work.sort_by_key(|w| std::cmp::Reverse(w.chunk));
+    (land.palette, work)
+}
+
+/// `/tss undo`: queue the restoring of the player's last finished spell.
+pub fn undo(_game: &mut super::Game<'_>, uuid: u128) -> String {
+    let taken = JOURNALS.with(|j| {
+        let mut all = j.borrow_mut();
+        let list = all.get_mut(&uuid)?;
+        // A spell that changed nothing has nothing to undo.
+        list.retain(|journal| !journal.done || !journal.land.is_empty());
+        let newest = list.last()?;
+        if !newest.done {
+            return Some(Err(newest.skill));
+        }
+        list.pop().map(Ok)
+    });
+    match taken {
+        None => "Nothing to undo".to_owned(),
+        Some(Err(skill)) => format!("{} must finish first", skill.title()),
+        Some(Ok(journal)) => {
+            let title = journal.skill.title();
+            let (palette, chunks) = by_chunk(journal.land);
+            RESTORES.with(|r| r.borrow_mut().push(Restore { uuid, dimension: journal.dimension, title, palette, chunks }));
+            format!("Restoring the land of {title}…")
+        }
+    }
+}
+
+/// Put back a few chunks of every undo in this level.
+fn restore_tick(game: &mut super::Game<'_>, dimension: &str) {
+    if RESTORES.with(|r| r.borrow().iter().all(|restore| restore.dimension != dimension)) {
+        return;
+    }
+    let mut restores = RESTORES.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    restores.retain_mut(|restore| {
+        if restore.dimension != dimension {
+            return true;
+        }
+        let mut budget = RESTORE_CHUNKS;
+        // Chunks not loaded wait at the back of the queue, to be asked again.
+        let mut looked = RESTORE_CHUNKS * 4;
+        let mut edit = Edit::default();
+        while budget > 0 && looked > 0 {
+            let Some(mut work) = restore.chunks.pop() else { break };
+            looked -= 1;
+            let first = work.columns.first().map(|(column, _)| *column);
+            let loaded = first.is_some_and(|column| {
+                game.native_surface_heights(dimension, &[column], NativeHeightmap::WorldSurface)
+                    .is_ok_and(|heights| heights.first().is_some_and(Option::is_some))
+            });
+            if !loaded {
+                work.tries += 1;
+                if work.tries < RESTORE_PATIENCE {
+                    restore.chunks.insert(0, work);
+                } else {
+                    log::warn!("[{ID}] the chunk {:?} never loaded: its land stays as it is", work.chunk);
+                }
+                continue;
+            }
+            budget -= 1;
+            for ((x, z), segs) in &work.columns {
+                for seg in segs {
+                    let mut y = seg.y;
+                    for &(id, count) in &seg.runs {
+                        let block = restore.palette.get(usize::from(id)).map_or(AIR, String::as_str);
+                        edit.column(*x, *z, y, u32::from(count), block);
+                        y += i32::from(count);
+                    }
+                }
+            }
+        }
+        if !edit.is_empty() {
+            apply_raw(game, dimension, &edit);
+        }
+        if restore.chunks.is_empty() {
+            game.native_action_bar(restore.uuid, crate::text::Text::literal("The land is restored".to_owned()));
+            log::info!("[{ID}] the land of {} is restored", restore.title);
+            return false;
+        }
+        true
+    });
+    RESTORES.with(|r| {
+        let mut r = r.borrow_mut();
+        restores.append(&mut r);
+        *r = restores;
+    });
 }
 
 /// Set single blocks (a spire, a star's crystal) in column runs.
@@ -2262,5 +2816,73 @@ mod tests {
         let c = Carving::new(String::new(), Shape::Cylinder { cx: 0.0, cz: 0.0, r: 40.0 }, [0.0; 3], 40.0, true, 12, None, -64, 319);
         assert!(c.reach.windows(2).all(|w| w[0] <= w[1]));
         assert!(c.chunks.contains(&[0, 0]) && c.chunks.contains(&[-1, -1]));
+    }
+
+    /// The ids of a column's recorded blocks from `a` to `b`, `None` where nothing is.
+    fn recorded(land: &Land, x: i32, z: i32, a: i32, b: i32) -> Vec<Option<String>> {
+        let mut out = vec![None; (b - a) as usize];
+        for (y, height, id) in land.runs(x, z) {
+            for k in y..y + height as i32 {
+                if (a..b).contains(&k) {
+                    out[(k - a) as usize] = Some(land.palette[usize::from(id)].clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_journal_keeps_only_what_is_not_kept() {
+        let mut land = Land::default();
+        assert_eq!(land.missing(1, 2, 10, 20), vec![(10, 20)]);
+        land.store(1, 2, 12, &[0, 0, 0]);
+        assert_eq!(land.missing(1, 2, 10, 20), vec![(10, 12), (15, 20)]);
+        assert_eq!(land.missing(1, 2, 12, 15), vec![]);
+        assert_eq!(land.missing(3, 2, 10, 20), vec![(10, 20)]);
+    }
+
+    #[test]
+    fn the_first_write_wins_and_the_runs_reproduce_the_land() {
+        // The land, up from y = 0: stone x4, dirt x2, grass, then air above.
+        let palette = names(&["minecraft:air", "minecraft:stone", "minecraft:dirt", "minecraft:grass_block"]);
+        let row: Vec<u16> = vec![1, 1, 1, 1, 2, 2, 3];
+        let mut land = Land::default();
+        // A first edit takes y 3..6; the second, over y 2..9, reads the land
+        // as the first left it (air from 3 up) but may only add y 2 and 6..9.
+        land.record(5, 5, (3, 6), 0, &row, &palette);
+        let after: Vec<u16> = vec![1, 1, 1, 0, 0, 0, 0];
+        land.record(5, 5, (2, 9), 0, &after, &palette);
+        let got = recorded(&land, 5, 5, 2, 9);
+        let got: Vec<&str> = got.iter().map(|b| b.as_deref().unwrap_or("none")).collect();
+        let want = ["stone", "stone", "dirt", "dirt", "air", "air", "air"].map(|n| format!("minecraft:{n}"));
+        // y 2 comes from the second read; y 3..6 are the first write's.
+        assert_eq!(got, want.iter().map(String::as_str).collect::<Vec<_>>());
+        // The runs are compact.
+        assert!(land.columns[&(5, 5)].iter().map(|s| s.runs.len()).sum::<usize>() <= 8);
+    }
+
+    #[test]
+    fn long_runs_split_and_come_back_whole() {
+        let mut land = Land::default();
+        let ids = vec![7u16; 70_000];
+        land.store(0, 0, -64, &ids);
+        let total: u32 = land.runs(0, 0).iter().map(|r| r.1).sum();
+        assert_eq!(total, 70_000);
+        assert_eq!(land.runs(0, 0)[1].0, -64 + 65_535);
+    }
+
+    #[test]
+    fn a_journal_groups_its_columns_by_chunk() {
+        let mut land = Land::default();
+        land.store(-1, 0, 0, &[1]);
+        land.store(0, 0, 0, &[1]);
+        land.store(15, 15, 0, &[1]);
+        let (_, work) = by_chunk(land);
+        assert_eq!(work.len(), 2);
+        assert_eq!(work.iter().map(|w| w.columns.len()).sum::<usize>(), 3);
     }
 }

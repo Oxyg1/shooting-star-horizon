@@ -1,0 +1,155 @@
+{
+  "eh_arm": {
+    "subtitle": "subtitles.ss_port.eh_arm",
+    "sounds": [
+      {
+        "name": "ss_port:eh_arm",
+        "stream": true
+      }
+    ]
+  },
+  "eh_crush": {
+    "subtitle": "subtitles.ss_port.eh_crush",
+    "sounds": [
+      {
+        "name": "ss_port:eh_crush",
+        "stream": true
+      }
+    ]
+  },
+  "eh_fall": {
+    "subtitle": "subtitles.ss_port.eh_fall",
+    "sounds": [
+      {
+        "name": "ss_port:eh_fall",
+        "stream": true
+      }
+    ]
+  },
+  "eh_land": {
+    "subtitle": "subtitles.ss_port.eh_land",
+    "sounds": [
+      {
+        "name": "ss_port:eh_land",
+        "stream": true
+      }
+    ]
+  },
+  "eh_feed": {
+    "subtitle": "subtitles.ss_port.eh_feed",
+    "sounds": [
+      {
+        "name": "ss_port:eh_feed",
+        "stream": true
+      }
+    ]
+  },
+  "eh_tear": {
+    "subtitle": "subtitles.ss_port.eh_tear",
+    "sounds": [
+      {
+        "name": "ss_port:eh_tear",
+        "stream": true
+      }
+    ]
+  },
+  "eh_collapse": {
+    "subtitle": "subtitles.ss_port.eh_collapse",
+    "sounds": [
+      {
+        "name": "ss_port:eh_collapse",
+        "stream": true
+      }
+    ]
+  },
+  "eh_flash": {
+    "subtitle": "subtitles.ss_port.eh_flash",
+    "sounds": [
+      {
+        "name": "ss_port:eh_flash",
+        "stream": true
+      }
+    ]
+  },
+  "eh_rim": {
+    "subtitle": "subtitles.ss_port.eh_rim",
+    "sounds": [
+      {
+        "name": "ss_port:eh_rim",
+        "stream": true
+      }
+    ]
+  },
+  "sn_arm": {
+    "subtitle": "subtitles.ss_port.sn_arm",
+    "sounds": [
+      {
+        "name": "ss_port:sn_arm",
+        "stream": true
+      }
+    ]
+  },
+  "sn_ignite": {
+    "subtitle": "subtitles.ss_port.sn_ignite",
+    "sounds": [
+      {
+        "name": "ss_port:sn_ignite",
+        "stream": true
+      }
+    ]
+  },
+  "sn_swell": {
+    "subtitle": "subtitles.ss_port.sn_swell",
+    "sounds": [
+      {
+        "name": "ss_port:sn_swell",
+        "stream": true
+      }
+    ]
+  },
+  "sn_implode": {
+    "subtitle": "subtitles.ss_port.sn_implode",
+    "sounds": [
+      {
+        "name": "ss_port:sn_implode",
+        "stream": true
+      }
+    ]
+  },
+  "sn_blast": {
+    "subtitle": "subtitles.ss_port.sn_blast",
+    "sounds": [
+      {
+        "name": "ss_port:sn_blast",
+        "stream": true
+      }
+    ]
+  },
+  "sn_wave": {
+    "subtitle": "subtitles.ss_port.sn_wave",
+    "sounds": [
+      {
+        "name": "ss_port:sn_wave",
+        "stream": true
+      }
+    ]
+  },
+  "sn_burn": {
+    "subtitle": "subtitles.ss_port.sn_burn",
+    "sounds": [
+      {
+        "name": "ss_port:sn_burn",
+        "stream": true
+      }
+    ]
+  },
+  "sn_dawn": {
+    "subtitle": "subtitles.ss_port.sn_dawn",
+    "sounds": [
+      {
+        "name": "ss_port:sn_dawn",
+        "stream": true
+      }
+    ]
+  }
+}

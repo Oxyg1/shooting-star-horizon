@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.10.0"
+version = "0.11.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -76,6 +76,13 @@ id = "horizon"
 file = "crates/horizon-client/src/game/native_hooks.rs"
 name = "shooting_star_horizon"
 source = "horizon.rs"
+
+# SS-H2 Supernova, the port's own skill: its light, screen and film.
+[[module]]
+id = "nova"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_nova"
+source = "nova.rs"
 
 # The first run: the original's files fetched from CurseForge and made into
 # the content mod (this repository carries none of them).

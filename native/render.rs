@@ -43,6 +43,7 @@ const OWN_PROGRAMS: &[(&str, &str)] = &[
     ("hz_shock.fsh", hzfx::SHOCK),
     ("hz_streak.fsh", hzfx::STREAK),
     ("hz_horizon.fsh", hzfx::HORIZON),
+    ("hz_nova.fsh", hzfx::NOVA),
 ];
 
 /// One of the original's textures (`moonfall/earth_day.jpg`).
