@@ -105,7 +105,9 @@ pub fn content_dir(game_dir: &Path) -> PathBuf {
 
 /// The content mod is there with the original's files.
 pub fn ready(game_dir: &Path) -> bool {
-    content_dir(game_dir).join("data").join(MOD_ID).join("fx").join("composite.fsh").is_file()
+    let data = content_dir(game_dir).join("data").join(MOD_ID);
+    // hz9 added Gravitia's machine: an older content mod is built again.
+    data.join("fx").join("composite.fsh").is_file() && data.join("models").join("gravitia").join("machine.bin").is_file()
 }
 
 /// Its films' tables are there.

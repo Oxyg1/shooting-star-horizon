@@ -137,6 +137,33 @@ impl Screen {
     }
 }
 
+/// SS-06 Gravitia's ring engine, posed for this frame: the original's
+/// machine mesh (`models/gravitia/machine.bin`) drawn into `MeshColor` and
+/// `MeshDist` before the passes, which lay it into the sky.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Machine {
+    /// Projection times view, camera-relative; `None` is the world's own.
+    pub view_proj: Option<[f32; 16]>,
+    /// Each part's model matrix (column-major), in the file's part order.
+    pub models: Vec<[f32; 16]>,
+    /// Each part's glow (its glowing panels' strength).
+    pub glow: Vec<f32>,
+    /// Each part's ring radius, round which the sky draws its band thinner.
+    pub thin: Vec<f32>,
+    /// How thin (1 is as built).
+    pub thin_k: f32,
+    pub cam_pos: [f32; 3],
+    pub sun_dir: [f32; 3],
+    pub sun_col: [f32; 3],
+    /// The Earth (radius 1 round the origin) shadows the Sun.
+    pub earth_shade: bool,
+    pub earth_rel: [f32; 3],
+    /// The light at the core: colour and reach.
+    pub core: [f32; 4],
+    /// Where the nebula lies, that its metal mirrors.
+    pub behind: [f32; 3],
+}
+
 /// A frame's whole ask.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frame {
@@ -144,6 +171,8 @@ pub struct Frame {
     pub screen: Screen,
     /// Seconds of the world's clock, for the shaders' `GTime`.
     pub time: f32,
+    /// Gravitia's machine, while it is in the sky or the film.
+    pub machine: Option<Machine>,
 }
 
 impl Frame {
@@ -209,6 +238,7 @@ pub const ASSET_FILES: &[&str] = &[
     "films/stars_space_3.bin",
     "films/tess_space.bin",
     "films/grav_space.bin",
+    "models/gravitia/machine.bin",
     "films/tess_sky.bin",
 ];
 

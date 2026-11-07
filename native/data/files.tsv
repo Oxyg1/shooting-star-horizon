@@ -201,6 +201,7 @@ data/shooting_star_demo/damage_type/shooting_star_hit.json	1.5.2	data/shooting_s
 data/shooting_star_demo/dimension/black.json	1.5.2	data/shooting_star_demo/dimension/black.json
 data/shooting_star_demo/dimension/gravitia_stage.json	1.5.2	data/shooting_star_demo/dimension/gravitia_stage.json
 data/shooting_star_demo/dimension_type/black.json	1.5.2	data/shooting_star_demo/dimension_type/black.json
+data/shooting_star_demo/models/gravitia/machine.bin	1.5.2	assets/shooting_star_demo/models/gravitia/machine.bin
 data/shooting_star_demo/fx/bloom_down.fsh	1.4.4	assets/shooting_star_demo/shaders/fx/bloom_down.fsh
 data/shooting_star_demo/fx/bloom_up.fsh	1.4.4	assets/shooting_star_demo/shaders/fx/bloom_up.fsh
 data/shooting_star_demo/fx/common.glsl	1.4.4	assets/shooting_star_demo/shaders/fx/common.glsl

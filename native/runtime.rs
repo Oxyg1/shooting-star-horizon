@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz8";
+pub const VERSION: &str = "1.5.2-hz9";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -44,6 +44,11 @@ pub const KEYS: [(&str, &str, &str); 11] = [
 ];
 
 // ---- the window's remote ------------------------------------------------------------------------------------------
+
+thread_local! {
+    /// The levels that are Imaginary Space, by dimension, with their city's seed (the server says).
+    static VOID: std::cell::RefCell<std::collections::HashMap<String, u32>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
 thread_local! {
     static SELECTED: std::cell::Cell<Skill> = const { std::cell::Cell::new(Skill::ShootingStar) };
@@ -355,7 +360,17 @@ pub fn on_message(channel: &str, data: &[u8]) {
                 SHOWN.with(|s| s.set(Some(std::time::Instant::now())));
             }
         }
-        sk::FX_HELLO => DIRTY.with(|d| d.set(true)),
+        sk::FX_HELLO => {
+            DIRTY.with(|d| d.set(true));
+            // A world joined: what it holds of Imaginary Space follows.
+            VOID.with(|v| v.borrow_mut().clear());
+        }
+        sk::FX_VOID if data.len() > 5 => {
+            let seed = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            if let Ok(dimension) = std::str::from_utf8(&data[5..]) {
+                VOID.with(|v| v.borrow_mut().insert(dimension.to_owned(), seed));
+            }
+        }
         _ => {}
     }
 }
@@ -564,7 +579,7 @@ pub fn film_weight() -> f32 {
 /// Picks the film to play, each tick: a new spell of this player's starts
 /// its own, the last one's ends with it.
 fn direct(spells: &[ClientSpell], heights: (i32, i32)) {
-    let newest = spells.iter().rev().find(|s| s.start.mine && s.start.skill != Skill::Gravitia);
+    let newest = spells.iter().rev().find(|s| s.start.mine);
     PLAYING.with(|p| {
         let mut p = p.borrow_mut();
         match newest {
@@ -723,6 +738,9 @@ fn sound(game: &mut super::Game<'_>, film: bool, name: &str, at: [f64; 3], volum
     if film { ears(game, name, volume) } else { play(game, name, at, volume, pitch) }
 }
 
+/// Gravitia's score is mastered hotter than the others': this brings it level with them.
+const GRAV_VOLUME: f32 = 0.35;
+
 fn jolt(at: [f64; 3], strength: f32, reach: f64, now: u64) {
     SHAKES.with(|s| s.borrow_mut().push(Jolt { at, strength, reach, born: now }));
 }
@@ -854,18 +872,18 @@ fn cue(game: &mut super::Game<'_>, spell: &mut ClientSpell, t: i32, now: u64) {
             }
         }
         Skill::Gravitia => {
-            if t == 0 {
-                ears(game, "grav_rework", 1.0);
+            // Its whole score is heard in the head, wherever the player stands.
+            for (name, volume) in super::shooting_star_gravitia::sounds(t) {
+                ears(game, &name, volume * GRAV_VOLUME);
             }
-            if t == 9 {
-                play(game, "grav_mark", caster, 1.0, 1.0);
+            if let Some(strength) = super::shooting_star_gravitia::jolts(t) {
+                jolt(cam, strength as f32 * 2.0, 1.0e9, now);
             }
-            if t == 530 {
-                jolt(cam, 3.0, 1.0e9, now);
+            // The machine firing hums through the ground.
+            if (288..430).contains(&t) && t % 8 == 0 {
+                jolt(cam, 0.25, 1.0e9, now);
             }
-            if t > 530 && t < 620 && t % 6 == 0 {
-                jolt(cam, 0.6, 1.0e9, now);
-            }
+            let _ = caster;
         }
     }
 }
@@ -1508,6 +1526,39 @@ fn draw_engine(primitives: &mut crate::world_primitives::WorldPrimitives, spell:
     let _ = spell;
 }
 
+/// The world as the light needs it: the hour, how far the world is drawn,
+/// the camera's projection, and whether this level is Imaginary Space.
+fn light_context(game: &super::Game<'_>) -> super::shooting_star_visuals::Context {
+    use super::shooting_star_gravitia as grav;
+    let day_time = game.native_clock().map_or(18000, |c| c.day_time);
+    let render_blocks = (game.settings.render_distance as f32).max(2.0) * 16.0;
+    let dimension = game.native_player().map(|p| p.dimension.to_owned());
+    let void = dimension.as_deref().and_then(|d| VOID.with(|v| v.borrow().get(d).copied()));
+    let proj = game.native_camera().map(|c| {
+        let (yaw, pitch) = (c.yaw.to_radians(), c.pitch.to_radians());
+        let forward = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+        let right = [-yaw.cos(), 0.0, -yaw.sin()];
+        let up = [
+            right[1] * forward[2] - right[2] * forward[1],
+            right[2] * forward[0] - right[0] * forward[2],
+            right[0] * forward[1] - right[1] * forward[0],
+        ];
+        let p = c.projection;
+        let tan_half = if p[5].abs() > 1e-6 { 1.0 / p[5] } else { (c.fov_degrees.to_radians() * 0.5).tan() };
+        let aspect = if p[0].abs() > 1e-6 { p[5] / p[0] } else { 16.0 / 9.0 };
+        grav::glam_like::Proj { forward, right, up, tan_half, aspect }
+    });
+    super::shooting_star_visuals::Context {
+        world: grav::World { day_time, render_blocks, banished: void.is_some() },
+        proj,
+        void: void.map(|seed| {
+            let a = f64::from(seed % 3600) / 10.0;
+            let a = a.to_radians();
+            (-a.sin(), a.cos())
+        }),
+    }
+}
+
 /// The spell's clock this frame, as the original's `SpellFx.time(partial)`.
 fn spell_time(spell: &ClientSpell, partial: f32) -> f32 {
     let speed = spell.start.speed;
@@ -1534,23 +1585,27 @@ pub fn frame_tick(game: &super::Game<'_>, partial: f32, camera: [f64; 3], primit
             .collect()
     });
     let time = (TICKS.with(std::cell::Cell::get) as f32 + partial) / 20.0;
-    let mut frame = super::shooting_star_visuals::frame(&views, camera, min_y, min_y + height - 1, time);
+    let context = light_context(game);
+    let mut frame = super::shooting_star_visuals::frame_in(&views, camera, min_y, min_y + height - 1, time, &context);
     if !assets_ok() {
         // Until the first run has the original's shaders, nothing to draw them with.
         frame.passes.clear();
     }
     let drew = !frame.passes.is_empty();
     horizon_client_render::gfx::native_render::shooting_star_fxframe::publish(frame);
-    // Tesseract and Gravitia keep their marks until their passes are ported.
-    SPELLS.with(|s| {
-        for spell in s.borrow().iter() {
-            match spell.start.skill {
-                Skill::Tesseract if (9..682).contains(&spell.age) => draw_grid(primitives, spell, spell.age),
-                Skill::Gravitia if (9..650).contains(&spell.age) => draw_engine(primitives, spell, camera, spell.age),
-                _ => {}
+    // Until the original's shaders are in, the Tesseract's grid and Gravitia's
+    // rings are drawn as lines, that a cast is never invisible.
+    if !assets_ok() {
+        SPELLS.with(|s| {
+            for spell in s.borrow().iter() {
+                match spell.start.skill {
+                    Skill::Tesseract if (9..682).contains(&spell.age) => draw_grid(primitives, spell, spell.age),
+                    Skill::Gravitia if (9..650).contains(&spell.age) => draw_engine(primitives, spell, camera, spell.age),
+                    _ => {}
+                }
             }
-        }
-    });
+        });
+    }
     if drew {
         DREW.with(|once| {
             if !once.replace(true) {

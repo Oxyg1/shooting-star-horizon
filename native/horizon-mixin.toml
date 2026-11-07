@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.8.0"
+version = "0.9.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -61,6 +61,14 @@ id = "tesseract"
 file = "crates/horizon-client/src/game/native_hooks.rs"
 name = "shooting_star_tesseract"
 source = "tesseract.rs"
+
+# SS-06 Gravitia's light: its ring engine posed tick by tick, the world's
+# pass, the screen and the sounds.
+[[module]]
+id = "gravitia"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_gravitia"
+source = "gravitia.rs"
 
 # The first run: the original's files fetched from CurseForge and made into
 # the content mod (this repository carries none of them).

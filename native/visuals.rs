@@ -7,6 +7,7 @@
 // Plain functions of the spells and the camera: tested on their own.
 use super::shooting_star_skills::{self as sk, Skill};
 use super::shooting_star_films as films;
+use super::shooting_star_gravitia as gravitia;
 use horizon_client_render::gfx::native_render::shooting_star_fxframe::{Frame, Pass, Screen};
 
 /// The spell's film as this frame sees it: its clock and how much it holds the camera.
@@ -91,8 +92,29 @@ fn pulse_phase(t: f64, span: f64, total: f64) -> f64 {
     0.6 * s + 3.4 * span * k * k * k / 3.0
 }
 
+/// What the light needs of the world beyond the spells and the camera.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Context {
+    pub world: gravitia::World,
+    /// The camera's projection, for the impact frames' focus.
+    pub proj: Option<gravitia::glam_like::Proj>,
+    /// The camera is in Imaginary Space: its city's heading, for the sky.
+    pub void: Option<(f64, f64)>,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Context { world: gravitia::World { day_time: 18000, render_blocks: 192.0, banished: false }, proj: None, void: None }
+    }
+}
+
 /// This frame's passes and screen for every spell playing, oldest first.
 pub fn frame(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f32) -> Frame {
+    frame_in(spells, camera, min_y, max_y, time, &Context::default())
+}
+
+/// The same, knowing the world.
+pub fn frame_in(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f32, context: &Context) -> Frame {
     let mut frame = Frame { time, ..Frame::default() };
     for spell in spells {
         match spell.start.skill {
@@ -100,8 +122,12 @@ pub fn frame(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f
             Skill::Gungnir => gungnir(&mut frame, spell, camera, max_y),
             Skill::SevenStars => seven(&mut frame, spell, camera),
             Skill::Tesseract => tess(&mut frame, spell, camera, min_y, max_y),
-            Skill::Gravitia => {}
+            Skill::Gravitia => gravitia::frame(&mut frame, spell, camera, context.world, context.proj.as_ref()),
         }
+    }
+    if let Some(heading) = context.void {
+        // Imaginary Space's sky: space for good.
+        gravitia::void_sky(&mut frame, heading);
     }
     frame
 }

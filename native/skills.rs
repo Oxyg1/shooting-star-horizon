@@ -237,7 +237,8 @@ impl Skill {
             Skill::Gungnir => 480,
             Skill::SevenStars => 560,
             Skill::Tesseract => 682,
-            Skill::Gravitia => 912,
+            // The machine hangs in the sky for a hundred seconds after the drop.
+            Skill::Gravitia => 2118,
         }
     }
 
@@ -248,7 +249,8 @@ impl Skill {
             Skill::Gungnir => 322,
             Skill::SevenStars => 290,
             Skill::Tesseract => 462,
-            Skill::Gravitia => 530,
+            // The blow, under its white flash: the world is sent away unseen.
+            Skill::Gravitia => 438,
         }
     }
 
@@ -520,6 +522,8 @@ pub const FX_STATE: u8 = 3;
 pub const FX_START: u8 = 5;
 pub const FX_SELECT: u8 = 6;
 pub const FX_HELLO: u8 = 7;
+/// A level that is Imaginary Space: seed (u32 LE), then its dimension's name.
+pub const FX_VOID: u8 = 8;
 
 /// A spell as its effects are sent: who, what, where, and how it was tuned.
 #[derive(Clone, Copy, Debug, PartialEq)]

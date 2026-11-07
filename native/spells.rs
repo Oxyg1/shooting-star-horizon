@@ -101,6 +101,9 @@ pub fn server_tick(game: &mut super::Game<'_>) {
 /// A player joined: ask their window for its selection and tuning.
 pub fn player_joined(game: &mut super::Game<'_>, uuid: u128) {
     let _ = game.native_net_send_to_player(uuid, CHANNEL, &[sk::FX_HELLO]);
+    for (dimension, seed) in city::banished_levels() {
+        let _ = game.native_net_send_to_player(uuid, CHANNEL, &city::void_message(&dimension, seed));
+    }
     send_state(game, uuid);
 }
 
@@ -1418,6 +1421,10 @@ fn is_air(name: &str) -> bool {
 // ---- SS-06 Gravitia ---------------------------------------------------------------------------------------------
 
 fn grav_tick(game: &mut super::Game<'_>, spell: &mut Spell, t: i32) {
+    if t == 1 {
+        // Gravitia is cast under the night sky, as the original sets it.
+        game.native_run_command(&format!("execute in {} run time set midnight", spell.dimension));
+    }
     if t == spell.skill.impact() {
         city::banish(game, &spell.dimension, spell.seed as u32);
         log::info!("[{ID}] Gravitia: {} is sent into Imaginary Space", spell.dimension);

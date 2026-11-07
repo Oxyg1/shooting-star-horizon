@@ -386,6 +386,19 @@ fn append(lines: &[String]) {
     }
 }
 
+/// Every level sent into Imaginary Space, with its city's seed.
+pub fn banished_levels() -> Vec<(String, u32)> {
+    LEVELS.with(|l| l.borrow().iter().map(|(d, b)| (d.clone(), b.seed)).collect())
+}
+
+/// The message telling a window that `dimension` is Imaginary Space.
+pub fn void_message(dimension: &str, seed: u32) -> Vec<u8> {
+    let mut out = vec![super::shooting_star_skills::FX_VOID];
+    out.extend_from_slice(&seed.to_le_bytes());
+    out.extend_from_slice(dimension.as_bytes());
+    out
+}
+
 /// Whether `dimension` is Imaginary Space.
 pub fn banished(dimension: &str) -> bool {
     LEVELS.with(|l| l.borrow().contains_key(dimension))
@@ -399,6 +412,11 @@ pub fn banish(game: &mut super::Game<'_>, dimension: &str, seed: u32) {
     }
     append(&[format!("banished {dimension} {seed}")]);
     LEVELS.with(|l| l.borrow_mut().insert(dimension.to_owned(), Banished::new(seed)));
+    // Every window learns it, for the sky it draws there from now on.
+    let message = void_message(dimension, seed);
+    for player in game.native_server_players() {
+        let _ = game.native_net_send_to_player(player.uuid, super::shooting_star::CHANNEL, &message);
+    }
     queue_round_players(game, dimension);
     let (min_y, height) = game.native_world_height();
     let city = City { seed, min_y, max_y: min_y + height - 1 };
