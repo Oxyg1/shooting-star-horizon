@@ -143,14 +143,13 @@ pub fn start(game_dir: PathBuf, cache: PathBuf, films_only: bool) {
     }
     let spawned = std::thread::Builder::new().name("shooting star setup".into()).spawn(move || {
         let result = if films_only { films(&game_dir, &cache) } else { run(&game_dir, &cache) };
-        // Done with the original's jars: kept only while the films still wait for a Java.
-        if matches!(result, Ok(true)) {
-            let _ = std::fs::remove_dir_all(&cache);
-        } else {
-            for j in &JARS {
-                let _ = std::fs::remove_file(cache.join(format!("mc26.3-{}.jar", j.version)));
-            }
+        // The original's jars stay (checked by their SHA-256 each time), so a
+        // later rebuild of the content mod never downloads them again; only
+        // the films' working copies go.
+        for j in &JARS {
+            let _ = std::fs::remove_file(cache.join(format!("mc26.3-{}.jar", j.version)));
         }
+        let _ = std::fs::remove_dir_all(cache.join("films-tool"));
         match result {
             Ok(films) => set(Status::Done { films }),
             Err(error) => {
@@ -176,6 +175,16 @@ fn jar(jar: &Jar, cache: &Path) -> Result<Vec<u8>, String> {
         && sha256(&bytes) == jar.sha256
     {
         return Ok(bytes);
+    }
+    // The one-line installers keep their own copy: no need to fetch it twice.
+    for dir in installer_caches() {
+        if let Ok(bytes) = std::fs::read(dir.join(jar.file))
+            && sha256(&bytes) == jar.sha256
+        {
+            let _ = std::fs::create_dir_all(cache);
+            let _ = std::fs::write(&path, &bytes);
+            return Ok(bytes);
+        }
     }
     set(Status::Working(format!("Downloading the original ({}) from CurseForge", jar.version)));
     // A mirror of the same files, when CurseForge can't be reached (checked by the same SHA-256).
@@ -214,6 +223,21 @@ fn jar(jar: &Jar, cache: &Path) -> Result<Vec<u8>, String> {
     std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
     let _ = std::fs::write(&path, &bytes);
     Ok(bytes)
+}
+
+/// Where `install.ps1` and `install.sh` keep the original's jars.
+fn installer_caches() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        out.push(PathBuf::from(local).join("shooting-star-horizon"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
+        out.push(PathBuf::from(xdg).join("shooting-star-horizon"));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        out.push(PathBuf::from(home).join(".cache").join("shooting-star-horizon"));
+    }
+    out
 }
 
 /// The mc26.3 jar inside a jar of the original.

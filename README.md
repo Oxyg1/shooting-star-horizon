@@ -104,8 +104,10 @@ curl -fsSL https://raw.githubusercontent.com/Oxyg1/shooting-star-horizon/main/in
 * **Катсцен нет:** для их таблиц нужна Java 25. Она появляется вместе с
   любой версией 26.x в Horizon Launcher или Minecraft Launcher. После её
   установки мод сделает таблицы при следующем запуске.
-* Удаление: `horizon-launcher mods remove shooting_star`, затем папка
-  `horizon-mods/shooting_star_demo` в папке игры (`%APPDATA%\horizon` или `~/.local/share/horizon`).
+* Скачанный оригинал (≈145 МБ) хранится в `horizon-mods/.horizon-mod-data/shooting_star/original`,
+  чтобы обновления не качали его снова.
+* Удаление: `horizon-launcher mods remove shooting_star`, затем папки
+  `horizon-mods/shooting_star_demo` и `horizon-mods/.horizon-mod-data/shooting_star` в папке игры (`%APPDATA%\horizon` или `~/.local/share/horizon`).
 
 </details>
 
