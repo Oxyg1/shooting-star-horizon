@@ -1,0 +1,1 @@
+{"template":"minecraft:iron_block","properties":{"hardness":12.0,"light":9,"sounds":"minecraft:netherite_block"},"state_properties":{"north":{"type":"boolean"},"south":{"type":"boolean"},"east":{"type":"boolean"},"west":{"type":"boolean"},"up":{"type":"boolean"},"down":{"type":"boolean"}},"item":true}

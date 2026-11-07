@@ -1,0 +1,7 @@
+target/
+*.hnmod
+*.part
+/build/
+/tools/films/out/
+.DS_Store
+Thumbs.db

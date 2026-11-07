@@ -1,0 +1,351 @@
+[mod]
+id = "shooting_star"
+version = "0.4.0"
+priority = 100
+
+# Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
+[compatibility]
+horizon_revision = "66f3981f522b24c250b21523a70080965b940424"
+
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star"
+source = "runtime.rs"
+
+[[module]]
+id = "skills"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_skills"
+source = "skills.rs"
+
+# The server's half: casting, the spells' timelines, the land they cut.
+[[module]]
+id = "spells"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_spells"
+source = "spells.rs"
+
+# SS-06 Gravitia's Imaginary Space, kept in the world's folder.
+[[module]]
+id = "city"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_city"
+source = "city.rs"
+
+# Each spell's light frame by frame: the original's fx drivers (StarFx,
+# GungnirFx, SevenStarsFx) setting its shaders' uniforms and the screen's.
+[[module]]
+id = "visuals"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_visuals"
+source = "visuals.rs"
+
+# What a frame asks of the render pass: plain data both crates see.
+[[module]]
+id = "fxframe"
+file = "crates/horizon-client-render/src/gfx/native_render.rs"
+name = "shooting_star_fxframe"
+source = "fxframe.rs"
+visibility = "pub"
+
+# The original's GLSL fx shaders, made naga modules (the render crate has
+# naga's GLSL frontend for shader packs).
+[[module]]
+id = "glsl"
+file = "crates/horizon-client-render/src/gfx/native_render.rs"
+name = "shooting_star_glsl"
+source = "glsl.rs"
+visibility = "pub"
+
+# The render pass: the original's chain of fx passes, bloom and composite,
+# run on wgpu over the world once it is drawn (API 58).
+[[module]]
+id = "render"
+file = "crates/horizon-client-render/src/gfx/native_render.rs"
+name = "shooting_star_render"
+source = "render.rs"
+visibility = "pub"
+
+[[injection]]
+id = "world_drawn"
+hook = "world_drawn"
+hook_version = 1
+kind = "HEAD"
+helper = "render_world_drawn.rs"
+bindings = [
+  { name = "world", ty = "&mut crate::gfx::native_render::WorldDrawn<'_>", value = "&mut *world" },
+]
+
+[[injection]]
+id = "render_needs"
+hook = "render_needs"
+hook_version = 1
+kind = "HEAD"
+helper = "render_needs.rs"
+bindings = [
+  { name = "needs", ty = "&mut crate::gfx::native_render::RenderNeeds", value = "&mut *needs" },
+]
+
+# `/tss` goes into the server's tree (API 8).
+[[injection]]
+id = "register_commands"
+hook = "register_commands"
+hook_version = 1
+kind = "HEAD"
+helper = "register_commands.rs"
+bindings = [
+  { name = "commands", ty = "&mut Vec<NativeCommand>", value = "&mut *commands" },
+]
+
+[[injection]]
+id = "perform_command"
+hook = "perform_command"
+hook_version = 1
+kind = "HEAD"
+helper = "perform_command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+# The Stellar Remote's right click casts a skill (API 13).
+[[injection]]
+id = "use_item"
+hook = "use_item"
+hook_version = 1
+kind = "HEAD"
+helper = "use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&ItemStack", value = "stack" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+# The mod's page in Options > Mods, with its keys (API 104).
+[[injection]]
+id = "mods"
+hook = "mods"
+hook_version = 1
+kind = "HEAD"
+helper = "mods.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "key"
+hook = "key"
+hook_version = 1
+kind = "HEAD"
+helper = "key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+[[injection]]
+id = "net_from_client"
+hook = "net_from_client"
+hook_version = 1
+kind = "HEAD"
+helper = "net_from_client.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+# The steps of a cast that happen after it, run by the level's tick.
+[[injection]]
+id = "level_tick_post"
+hook = "level_tick_post"
+hook_version = 1
+kind = "HEAD"
+helper = "level_tick_post.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]
+
+# Once a tick, in the window and on the server: the spells' timelines.
+[[injection]]
+id = "tick"
+hook = "tick"
+hook_version = 1
+kind = "HEAD"
+helper = "tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+]
+
+# A chunk loaded on the server: Imaginary Space spreads to it.
+[[injection]]
+id = "chunk_load"
+hook = "chunk_load"
+hook_version = 1
+kind = "HEAD"
+helper = "chunk_load.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+  { name = "chunk", ty = "[i32; 2]", value = "chunk" },
+  { name = "new", ty = "bool", value = "new" },
+]
+
+# A player joined: their window sends its tuning.
+[[injection]]
+id = "player_logged_in"
+hook = "player_logged_in"
+hook_version = 1
+kind = "HEAD"
+helper = "player_logged_in.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "name", ty = "&str", value = "name" },
+]
+
+# The strike's effects reach the window (API 81: mod messages).
+[[injection]]
+id = "net_from_server"
+hook = "net_from_server"
+hook_version = 1
+kind = "HEAD"
+helper = "net_from_server.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+# The remote's tooltip: what it will cast (API 62).
+[[injection]]
+id = "tooltip"
+hook = "tooltip"
+hook_version = 1
+kind = "HEAD"
+helper = "tooltip.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "stack", ty = "&ItemStack", value = "stack" },
+  { name = "lines", ty = "&mut Vec<(Text, u32)>", value = "&mut *lines" },
+]
+
+# The spell menu: its drawing and its clicks (API 111's mod screen).
+[[injection]]
+id = "screen_render_post"
+hook = "screen_render_post"
+hook_version = 1
+kind = "HEAD"
+helper = "screen_render_post.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+  { name = "screen", ty = "&crate::game::native_hooks::NativeScreenView<'_>", value = "screen" },
+]
+
+[[injection]]
+id = "screen_click"
+hook = "screen_mouse_button_pressed_pre"
+hook_version = 1
+kind = "HEAD"
+helper = "screen_click.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "screen", ty = "&crate::game::native_hooks::NativeScreenView<'_>", value = "screen" },
+  { name = "button", ty = "i32", value = "button" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# The remote's indicator in the corner (API 82's HUD batch).
+[[injection]]
+id = "hud"
+hook = "hud"
+hook_version = 1
+kind = "HEAD"
+helper = "hud.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::native_hooks::Game<'_>", value = "&mut *self" },
+  { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+  { name = "corners", ty = "&mut horizon_client::extras_hud::Corners", value = "&mut *corners" },
+]
+
+# The camera's jolt (API 82).
+[[injection]]
+id = "camera_shake"
+hook = "camera_shake"
+hook_version = 1
+kind = "HEAD"
+helper = "camera_shake.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "partial", ty = "f32", value = "partial" },
+  { name = "shake", ty = "&mut crate::game::native_hooks::NativeShake", value = "&mut *shake" },
+]
+
+# The beam and the shockwave: lines, boxes and beams in world space.
+[[injection]]
+id = "world_primitives"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_world_primitives"
+helper = "world_primitives.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "partial", ty = "f32", value = "partial" },
+  { name = "camera", ty = "[f64; 3]", value = "camera" },
+  { name = "primitives", ty = "&mut horizon_client::world_primitives::WorldPrimitives", value = "&mut *primitives" },
+]
+
+# The films' camera (API 402): the shots of the original's cutscenes,
+# blended with the player's own view.
+[[injection]]
+id = "camera_pose"
+hook = "camera_pose"
+hook_version = 1
+kind = "HEAD"
+helper = "camera_pose.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "partial", ty = "f32", value = "partial" },
+  { name = "position", ty = "&mut [f64; 3]", value = "&mut *position" },
+  { name = "yaw", ty = "&mut f32", value = "&mut *yaw" },
+  { name = "pitch", ty = "&mut f32", value = "&mut *pitch" },
+]
+
+# The films' lens (API 109).
+[[injection]]
+id = "compute_fov"
+hook = "compute_fov"
+hook_version = 1
+kind = "HEAD"
+helper = "compute_fov.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "degrees", ty = "&mut f32", value = "&mut *degrees" },
+]
+
+# No first-person hand while the film holds the camera (API 87).
+[[injection]]
+id = "render_hand"
+hook = "render_hand"
+hook_version = 1
+kind = "HEAD"
+helper = "render_hand.rs"
+bindings = [
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# The HUD steps aside for the film, as the original's `hideHud` (API 139).
+[[injection]]
+id = "gui_layer_pre"
+hook = "gui_layer_pre"
+hook_version = 1
+kind = "HEAD"
+helper = "gui_layer_pre.rs"
+bindings = [
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]

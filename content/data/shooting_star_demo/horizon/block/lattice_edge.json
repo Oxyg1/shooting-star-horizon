@@ -1,0 +1,1 @@
+{"template":"minecraft:tinted_glass","properties":{"hardness":6.0,"light":15,"sounds":"minecraft:amethyst_block"},"state_properties":{"hue":{"type":"enum","values":["0","1","2","3","4","5","6"]}},"item":true}

@@ -1,0 +1,10 @@
+{
+  "template": "minecraft:stick",
+  "max_stack_size": 1,
+  "rarity": "epic",
+  "components": {
+    "minecraft:lore": [
+      {"text": "A weathered TV remote with a flip cover. Probably harmless... right?", "color": "gray", "italic": true}
+    ]
+  }
+}
