@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/previews/hero.jpg" alt="SS-01: the railgun's film, the Milky Way from 58,000 light years" width="100%">
+<img src="docs/previews/cover@2x.jpg" alt="The Shooting Star for Horizon: Gravitia's ring engine round the Earth" width="100%">
 
 # ✦ The Shooting Star — for Horizon
 
