@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.4.0"
+version = "0.5.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -40,6 +40,27 @@ id = "visuals"
 file = "crates/horizon-client/src/game/native_hooks.rs"
 name = "shooting_star_visuals"
 source = "visuals.rs"
+
+# The films' space scenes: the original's path uniforms, from their tables.
+[[module]]
+id = "films"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_films"
+source = "films.rs"
+
+# The films' cameras: the original's cutscene shots and director.
+[[module]]
+id = "cutscenes"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_cutscenes"
+source = "cutscenes.rs"
+
+# SS-05 Tesseract's light: its square, cubes, hypercube, engine and film.
+[[module]]
+id = "tesseract"
+file = "crates/horizon-client/src/game/native_hooks.rs"
+name = "shooting_star_tesseract"
+source = "tesseract.rs"
 
 # What a frame asks of the render pass: plain data both crates see.
 [[module]]

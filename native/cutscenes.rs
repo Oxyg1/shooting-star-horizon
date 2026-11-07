@@ -86,7 +86,7 @@ impl Subject {
     fn right(&self) -> V {
         [-self.forward[2], 0.0, self.forward[0]]
     }
-    fn frame(&self, anchor: V, r: f64, u: f64, f: f64) -> V {
+    pub fn frame(&self, anchor: V, r: f64, u: f64, f: f64) -> V {
         let (fw, rt) = (self.forward, self.right());
         add(anchor, [rt[0] * r + fw[0] * f, u, rt[2] * r + fw[2] * f])
     }
@@ -191,17 +191,33 @@ pub struct Shot {
     pub path: Path,
 }
 
+impl Shot {
+    /// A shot that starts on a cut.
+    pub fn cut(start: i32, end: i32, path: impl Fn(&Subject, &dyn Ground, f32) -> Pose + Send + Sync + 'static) -> Shot {
+        Shot { start, end, blend: 0, path: Box::new(path) }
+    }
+
+    /// A shot that crossfades from the last over `blend` ticks.
+    pub fn sweep(start: i32, end: i32, blend: i32, path: impl Fn(&Subject, &dyn Ground, f32) -> Pose + Send + Sync + 'static) -> Shot {
+        Shot { start, end, blend, path: Box::new(path) }
+    }
+}
+
 fn cut(start: i32, end: i32, path: impl Fn(&Subject, &dyn Ground, f32) -> Pose + Send + Sync + 'static) -> Shot {
-    Shot { start, end, blend: 0, path: Box::new(path) }
+    Shot::cut(start, end, path)
 }
 
 fn sweep(start: i32, end: i32, blend: i32, path: impl Fn(&Subject, &dyn Ground, f32) -> Pose + Send + Sync + 'static) -> Shot {
-    Shot { start, end, blend, path: Box::new(path) }
+    Shot::sweep(start, end, blend, path)
 }
 
 pub fn smooth(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
+}
+
+pub fn ease_in_out_pub(x: f32) -> f32 {
+    ease_in_out(x)
 }
 
 fn ease_in_out(x: f32) -> f32 {
@@ -217,6 +233,10 @@ pub struct Cutscene {
 }
 
 impl Cutscene {
+    pub fn from_shots(shots: Vec<Shot>) -> Cutscene {
+        Cutscene::new(shots)
+    }
+
     fn new(shots: Vec<Shot>) -> Cutscene {
         let end = shots.last().map_or(0, |s| s.end) as f32 + FADE_OUT;
         Cutscene { shots, end }
@@ -509,13 +529,14 @@ pub fn seven(power: f32, nodes: [V; 7]) -> Cutscene {
     Cutscene::new(shots)
 }
 
-/// The film of a spell, if it has one yet.
-pub fn of(start: &sk::Start, nodes: Option<[V; 7]>) -> Option<Cutscene> {
+/// The film of a spell, if it has one yet; `heights` the world's lowest and highest blocks.
+pub fn of(start: &sk::Start, nodes: Option<[V; 7]>, heights: (i32, i32)) -> Option<Cutscene> {
     match start.skill {
         Skill::ShootingStar => Some(star(f64::from(start.power))),
         Skill::Gungnir => Some(gungnir(start.power)),
         Skill::SevenStars => nodes.map(|n| seven(start.power, n)),
-        Skill::Tesseract | Skill::Gravitia => None,
+        Skill::Tesseract => Some(super::shooting_star_tesseract::cutscene(super::shooting_star_tesseract::Square::new(start, heights.0, heights.1))),
+        Skill::Gravitia => None,
     }
 }
 

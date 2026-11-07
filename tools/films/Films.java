@@ -13,17 +13,24 @@ import java.lang.reflect.*; import java.util.*; import java.io.*; import java.ni
 // Samples one of the original's film uniform functions over film time, adaptively, into a table.
 public class Films {
   static Method m; static int np; static double extra;
+  /** Set to sample something other than a path class's uniform method. */
+  interface Source { Map<String,float[]> at(float ct) throws Throwable; }
+  static Source source;
   static Map<String,float[]> at(float ct) throws Throwable {
+    if (source != null) return source.at(ct);
     Map<String,float[]> g=new LinkedHashMap<>(); Object[] a=new Object[np+1]; Class<?>[] pt=m.getParameterTypes();
     a[0]=ct; for(int i=1;i<np;i++) a[i]= pt[i]==double.class?(Object)extra:(Object)0f;
     a[np]=(java.util.function.BiConsumer<String,float[]>)(k,v)->g.put(k,v.clone()); m.invoke(null,a); return g; }
   static float[] flat(Map<String,float[]> g, List<String> names){ int n=0; for(String k:names) n+=g.get(k).length; float[] o=new float[n]; int i=0; for(String k:names) for(float v:g.get(k)) o[i++]=v; return o; }
   static boolean ok(float[] a, float[] b, float[] mid){ for(int i=0;i<a.length;i++){ double e=Math.abs(mid[i]-(a[i]+b[i])*0.5); double s=Math.max(Math.abs(a[i]),Math.abs(b[i])); if (e > 6e-4*s + 1e-4) return false; } return true; }
   static void export(String cls, int arity, float t0, float t1, String out, double turn) throws Throwable {
-    m=null; np=arity; extra=turn;
+    m=null; np=arity; extra=turn; source=null;
     Class<?> c=Class.forName("cyou.rimuru.shootingstardemo."+cls);
     for (Method k:c.getDeclaredMethods()){ Class<?>[] pt=k.getParameterTypes(); if(pt.length==np+1&&pt[np]==java.util.function.BiConsumer.class&&pt[0]==float.class){m=k;} }
     m.setAccessible(true);
+    sample(t0, t1, out);
+  }
+  static void sample(float t0, float t1, String out) throws Throwable {
     Map<String,float[]> first=at(t0); List<String> names=new ArrayList<>(first.keySet());
     HashMap<Float,Map<String,float[]>> cache=new HashMap<>();
     java.util.function.Function<Float,Map<String,float[]>> ev=(t)->cache.computeIfAbsent(t,(q)->{ try { return at(q); } catch(Throwable e){ throw new RuntimeException(e);} });
@@ -54,10 +61,37 @@ public class Films {
     System.out.println(out+": "+bo.size()/1024+" KiB");
   }
 
-  /** Every film table the port reads, into the folder given. */
+  /**
+   * The Tesseract's sky over the world (1.4.4's TessPath and engine, whose
+   * tess_sky shader 1.5.2 keeps): the engine's 48 parts posed, and the sky
+   * scene's numbers at scale 1 (the port redoes the part the scale changes).
+   */
+  static void tesseract(String dir) throws Throwable {
+    Class<?> engine = Class.forName("cyou.rimuru.shootingstardemo.client.fx.u");
+    Class<?> path = Class.forName("cyou.rimuru.shootingstardemo.client.fx.x");
+    Method pose = engine.getDeclaredMethod("a", float.class, float[].class);
+    Method sky = path.getDeclaredMethod("a", float.class, double.class);
+    pose.setAccessible(true); sky.setAccessible(true);
+    source = ct -> {
+      Map<String,float[]> g = new LinkedHashMap<>();
+      float[] eng = new float[192];
+      pose.invoke(null, ct, eng);
+      g.put("Eng", eng);
+      double[] v = (double[]) sky.invoke(null, ct, 1.0);
+      float[] f = new float[v.length];
+      for (int i = 0; i < v.length; i++) f[i] = (float) v[i];
+      g.put("Sky", f);
+      return g;
+    };
+    sample(270, 470, dir + "/tess_sky.bin");
+    source = null;
+  }
+
+  /** Every film table the port reads, into the folder given ("--tesseract": 1.4.4's). */
   public static void main(String[] a) throws Throwable {
     String dir = a.length > 0 ? a[0] : ".";
     Files.createDirectories(Paths.get(dir));
+    if (a.length > 1 && a[1].equals("--tesseract")) { tesseract(dir); return; }
     export("iillllliil", 3, 0, 352, dir + "/star_space.bin", 0);
     export("iillllliil", 2, 230, 330, dir + "/star_gun.bin", 0);
     export("iillllliil", 1, 230, 330, dir + "/star_rays.bin", 0);

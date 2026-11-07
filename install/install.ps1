@@ -152,6 +152,8 @@ try {
     $films = Join-Path $Out "data\$ModId\films"
     & $Java -cp ("{0};{1}" -f (Join-Path $Src 'tools\films\classes'), $Inner['1.5.2']) Films $films *> (Join-Path $Work 'films.log')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the films' tables could not be made" }
+    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'tools\films\classes'), $Inner['1.4.4']) Films $films --tesseract *> (Join-Path $Work 'films.log')
+    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the Tesseract's sky table could not be made" }
   } else {
     Say 'No Java 25 found: the films (the cutscenes in space) stay off. Install Horizon Launcher, or Java 25, and run this again.'
   }

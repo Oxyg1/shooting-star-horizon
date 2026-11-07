@@ -99,7 +99,8 @@ pub fn frame(spells: &[Spell], camera: [f64; 3], min_y: i32, max_y: i32, time: f
             Skill::ShootingStar => star(&mut frame, spell, camera, min_y),
             Skill::Gungnir => gungnir(&mut frame, spell, camera, max_y),
             Skill::SevenStars => seven(&mut frame, spell, camera),
-            Skill::Tesseract | Skill::Gravitia => {}
+            Skill::Tesseract => tess(&mut frame, spell, camera, min_y, max_y),
+            Skill::Gravitia => {}
         }
     }
     frame
@@ -168,6 +169,32 @@ fn star(frame: &mut Frame, spell: &Spell, camera: [f64; 3], min_y: i32) {
         screen.add_flash(0xFF6070, snap * 1.2 * near);
         screen.shake = screen.shake.max(snap * 0.5 * near);
     }
+}
+
+// ---- SS-05 ----------------------------------------------------------------------------------------------------------
+
+fn tess(frame: &mut Frame, spell: &Spell, camera: [f64; 3], min_y: i32, max_y: i32) {
+    use super::shooting_star_tesseract as tess;
+    let sq = tess::Square::new(&spell.start, min_y, max_y);
+    let t = spell.t;
+    let cover = spell.film.map_or(0.0, |f| tess::cover(f.ct) * f.weight);
+    if cover < 0.999 {
+        tess::passes(frame, &sq, t, spell.seed_f(), camera);
+    }
+    if let Some(film) = spell.film {
+        tess::film(frame, film.ct, film.weight, spell.seed_f());
+    }
+    if spell.film.is_some_and(|f| tess::cover(f.ct) > 0.5) {
+        return;
+    }
+    // The nearest point of the square's box, as the original's `edgeToward`.
+    let edge = [
+        camera[0].clamp(f64::from(sq.ox), f64::from(sq.ox + sq.zone)),
+        camera[1].clamp(f64::from(sq.ground), f64::from(sq.engine_y(t)).max(f64::from(sq.ground))),
+        camera[2].clamp(f64::from(sq.oz), f64::from(sq.oz + sq.zone)),
+    ];
+    let near = if spell.film.is_some() { 1.0 } else { (1.0 - distance(camera, edge) / 1200.0).clamp(0.2, 1.0) as f32 };
+    tess::screen(&mut frame.screen, &sq, t, near);
 }
 
 // ---- SS-03 ----------------------------------------------------------------------------------------------------------

@@ -201,6 +201,7 @@ pub const ASSET_FILES: &[&str] = &[
     "films/stars_space_3.bin",
     "films/tess_space.bin",
     "films/grav_space.bin",
+    "films/tess_sky.bin",
 ];
 
 static ASSETS: Mutex<Option<std::collections::HashMap<&'static str, &'static [u8]>>> = Mutex::new(None);

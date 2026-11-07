@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz4";
+pub const VERSION: &str = "1.5.2-hz5";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -415,7 +415,8 @@ pub fn client_tick(game: &mut super::Game<'_>) {
     });
     SHAKES.with(|s| s.borrow_mut().retain(|j| now.saturating_sub(j.born) < 60));
     let mut spells = SPELLS.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    direct(&spells);
+    let (bottom, height) = game.native_world_height();
+    direct(&spells, (bottom, bottom + height - 1));
     for spell in spells.iter_mut() {
         let until = (spell.clock + 1.0e-6).floor() as i32;
         while spell.age <= until && spell.age <= spell.start.skill.duration() + 40 {
@@ -488,14 +489,14 @@ pub fn film_weight() -> f32 {
 
 /// Picks the film to play, each tick: a new spell of this player's starts
 /// its own, the last one's ends with it.
-fn direct(spells: &[ClientSpell]) {
-    let newest = spells.iter().rev().find(|s| s.start.mine && s.start.skill != Skill::Tesseract && s.start.skill != Skill::Gravitia);
+fn direct(spells: &[ClientSpell], heights: (i32, i32)) {
+    let newest = spells.iter().rev().find(|s| s.start.mine && s.start.skill != Skill::Gravitia);
     PLAYING.with(|p| {
         let mut p = p.borrow_mut();
         match newest {
             Some(spell) if p.as_ref().is_none_or(|p| p.seed != spell.start.seed) => {
                 let nodes = (spell.start.skill == Skill::SevenStars).then(|| super::shooting_star_visuals::dipper_nodes(&spell.start));
-                if let Some(film) = cs::of(&spell.start, nodes) {
+                if let Some(film) = cs::of(&spell.start, nodes, heights) {
                     *p = Some(Playing { seed: spell.start.seed, film });
                 }
             }

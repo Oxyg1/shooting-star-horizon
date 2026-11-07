@@ -1232,16 +1232,11 @@ fn tess_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
         let ticks = spell.real_ticks(600);
         spell.spared = evacuate(game, spell, c, zone, ticks);
     }
-    for ring in 0..4 {
-        if t == sk::tess_wave_tick(ring)
-            && let Kind::Tess(state) = &mut spell.kind
-        {
-            for i in 0..8 {
-                for j in 0..8 {
-                    if sk::tess_ring(i, j) == ring {
-                        state.jobs.push_back((i, j));
-                    }
-                }
+    // Each cell on its own tick, ring by ring from the middle, as the window lights it.
+    if let Kind::Tess(state) = &mut spell.kind {
+        for (index, at) in super::shooting_star_tesseract::cube_ticks().iter().enumerate() {
+            if *at == t {
+                state.jobs.push_back((index as i32 % 8, index as i32 / 8));
             }
         }
     }

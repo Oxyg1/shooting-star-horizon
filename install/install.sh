@@ -115,6 +115,8 @@ if [ -n "$JAVA" ]; then
   say "Recording the films' cameras (Java: $JAVA)"
   "$JAVA" -cp "$SRC/tools/films/classes:$WORK/152.jar" Films "$OUT/data/$MOD_ID/films" >/dev/null 2>"$WORK/films.log" \
     || { cat "$WORK/films.log" >&2; die "the films' tables could not be made"; }
+  "$JAVA" -cp "$SRC/tools/films/classes:$WORK/144.jar" Films "$OUT/data/$MOD_ID/films" --tesseract >/dev/null 2>"$WORK/films.log" \
+    || { cat "$WORK/films.log" >&2; die "the Tesseract's sky table could not be made"; }
 else
   say "No Java 25 found: the films (the cutscenes in space) stay off. Install Horizon Launcher, or Java 25, and run this again."
 fi
