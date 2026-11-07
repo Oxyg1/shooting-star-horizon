@@ -147,6 +147,8 @@ struct State {
     targets: Option<Targets>,
     buffers: Vec<wgpu::Buffer>,
     warned: bool,
+    /// When the picture last moved while it steps (the impact frames' 12 a second).
+    stepped: Option<std::time::Instant>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -339,6 +341,7 @@ impl State {
             targets: None,
             buffers: Vec::new(),
             warned: false,
+            stepped: None,
         })
     }
 
@@ -572,7 +575,19 @@ fn run(state: &mut State, world: &mut WorldDrawn<'_>, frame: &Frame) {
     let fx_size = [((f64::from(size[0]) * scale) as u32).max(2), ((f64::from(size[1]) * scale) as u32).max(2)];
     if state.targets.as_ref().is_none_or(|t| t.size != size || t.fx_size != fx_size) {
         state.targets = Some(Targets::new(device, size, fx_size, state.raw_format));
+        state.stepped = None;
     }
+    // Stepping: between steps the last picture is shown again, whole, as the original's `stepFps`.
+    let now = std::time::Instant::now();
+    let step = frame.screen.step_fps;
+    if step > 0.5
+        && let (Some(at), Some(targets)) = (state.stepped, state.targets.as_ref())
+        && now.duration_since(at).as_secs_f32() < 1.0 / step
+    {
+        copy(state, world.device, world.encoder, &targets.out.view, world.color_view, &state.copy_frame);
+        return;
+    }
+    state.stepped = (step > 0.5).then_some(now);
     let upscaled = fx_size != size;
 
     // Programs and textures first: they need `state` mutably.

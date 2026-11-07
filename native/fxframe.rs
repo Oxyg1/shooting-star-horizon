@@ -70,6 +70,8 @@ pub struct Screen {
     pub grade: [f32; 4],
     /// How much of the picture is the film's own (a space scene, not the world).
     pub synthetic: f32,
+    /// Frames a second the whole picture steps at (the impact frames' 12), or 0.
+    pub step_fps: f32,
 }
 
 impl Default for Screen {
@@ -86,6 +88,7 @@ impl Default for Screen {
             impact: [0.0, 0.0, 0.5, 0.5],
             grade: [0.0; 4],
             synthetic: 0.0,
+            step_fps: 0.0,
         }
     }
 }
@@ -120,6 +123,11 @@ impl Screen {
             let [r, g, b] = rgb(color);
             self.vignette = [r, g, b, strength];
         }
+    }
+
+    /// The picture steps at `fps` (the slowest asked for wins).
+    pub fn step(&mut self, fps: f32) {
+        self.step_fps = if self.step_fps > 0.0 { self.step_fps.min(fps) } else { fps };
     }
 
     pub fn add_impact(&mut self, strength: f32, mode: i32, x: f32, y: f32) {

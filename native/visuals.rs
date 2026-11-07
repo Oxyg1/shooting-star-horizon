@@ -267,6 +267,7 @@ fn gungnir(frame: &mut Frame, spell: &Spell, camera: [f64; 3], max_y: i32) {
         let burst = since - 0.05;
         if burst >= 0.0 && burst < SILENT.len() as f32 * DRAWING {
             impact_sequence(screen, burst, near, DRAWING, &SILENT);
+            screen.step(12.0);
             let drawing = (burst / DRAWING) as i32;
             let into = burst / DRAWING - drawing as f32;
             if drawing % 2 == 0 {
@@ -288,6 +289,7 @@ fn gungnir(frame: &mut Frame, spell: &Spell, camera: [f64; 3], max_y: i32) {
         if (0.0..8.0).contains(&b) {
             if b < RINGING.len() as f32 * DRAWING {
                 impact_sequence(screen, b, near, DRAWING, &RINGING);
+                screen.step(12.0);
                 let drawing = (b / DRAWING) as i32;
                 screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { near } else { 0.3 * near });
             }
@@ -398,6 +400,7 @@ fn seven(frame: &mut Frame, spell: &Spell, camera: [f64; 3]) {
             } else if s - 0.05 < LANDING.len() as f32 * DRAWING {
                 let order: Vec<i32> = (0..LANDING.len()).map(|j| LANDING[(j + i) % LANDING.len()]).collect();
                 impact_sequence(screen, s - 0.05, near, DRAWING, &order);
+                screen.step(12.0);
                 let drawing = ((s - 0.05) / DRAWING) as i32;
                 screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { 0.9 } else { 0.25 } * near);
             }
@@ -417,6 +420,7 @@ fn seven(frame: &mut Frame, spell: &Spell, camera: [f64; 3]) {
             screen.add_flash(0xFFFFFF, 6.0);
         } else if fs - 0.06 < FINALE_BURST.len() as f32 * DRAWING {
             impact_sequence(screen, fs - 0.06, 1.0, DRAWING, &FINALE_BURST);
+            screen.step(12.0);
             let drawing = ((fs - 0.06) / DRAWING) as i32;
             screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { 1.0 } else { 0.3 });
             screen.aberration = screen.aberration.max(if drawing % 2 == 0 { 0.4 } else { 1.6 });

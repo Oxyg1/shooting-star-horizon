@@ -312,6 +312,7 @@ fn wave(screen: &mut Screen, since: f32, modes: &[i32], turn: usize, near: f32, 
     } else if since - 0.05 < modes.len() as f32 * DRAWING {
         let order: Vec<i32> = (0..modes.len()).map(|i| modes[(i + turn) % modes.len()]).collect();
         impacts(screen, since - 0.05, near, &order);
+        screen.step(12.0);
         let drawing = ((since - 0.05) / DRAWING) as i32;
         screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { 0.9 } else { 0.25 } * near);
     }
@@ -347,6 +348,7 @@ pub fn screen(screen: &mut Screen, sq: &Square, t: f32, near: f32) {
             screen.add_flash(0xFFFFFF, 5.0 * near);
         } else if land - 0.05 < OPEN.len() as f32 * DRAWING {
             impacts(screen, land - 0.05, near, &OPEN);
+            screen.step(12.0);
         }
         screen.add_flash(PRISM[(land * 9.0) as usize % 7], (-land * 5.0).exp() * 0.7 * near);
         screen.shake = screen.shake.max(window(land, 0.0, 0.02, 0.6, 2.0) * 1.5 * near);
@@ -371,6 +373,7 @@ pub fn screen(screen: &mut Screen, sq: &Square, t: f32, near: f32) {
             screen.add_flash(0xFFFFFF, 6.5);
         } else if fold - 0.06 < FOLD.len() as f32 * DRAWING {
             impacts(screen, fold - 0.06, 1.0, &FOLD);
+            screen.step(12.0);
             let drawing = ((fold - 0.06) / DRAWING) as i32;
             screen.zoom_blur = screen.zoom_blur.max(if drawing % 2 == 0 { 1.0 } else { 0.3 });
             screen.aberration = screen.aberration.max(if drawing % 2 == 0 { 0.5 } else { 1.8 });
