@@ -55,6 +55,32 @@ $Jars = @{
 }
 
 function Say($text) { Write-Host "* $text" -ForegroundColor Magenta }
+
+# A program run with its output kept. Windows PowerShell 5.1 turns whatever a
+# program writes to stderr (`java -version` writes there) into errors that
+# 'Stop' throws on, so programs are started directly, not with `&`.
+function Invoke-Program([string]$Exe, [string[]]$Arguments) {
+  $info = New-Object System.Diagnostics.ProcessStartInfo
+  $info.FileName = $Exe
+  $quoted = foreach ($a in $Arguments) { if ($a -match '[\s"]') { '"' + ($a -replace '"', '\"') + '"' } else { $a } }
+  $info.Arguments = $quoted -join ' '
+  $info.UseShellExecute = $false
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $info.CreateNoWindow = $true
+  $process = [System.Diagnostics.Process]::Start($info)
+  $stdout = $process.StandardOutput.ReadToEndAsync()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  [pscustomobject]@{ Code = $process.ExitCode; Out = $stdout.Result; Err = $stderr }
+}
+
+# A program run in front of the player (the launcher's own progress), whose stderr is not an error.
+function Invoke-Shown([string]$Exe, [string[]]$Arguments) {
+  $ErrorActionPreference = 'Continue'
+  & $Exe @Arguments | Out-Host
+  return $LASTEXITCODE
+}
 function Die($text) { Write-Host "x $text" -ForegroundColor Red; throw $text }
 
 if (-not $GameDir) {
@@ -136,13 +162,13 @@ try {
   if ($onPath) { $candidates += $onPath.Source }
   foreach ($candidate in $candidates) {
     if ($candidate -and (Test-Path $candidate)) {
-      $version = (& $candidate -version 2>&1 | Out-String)
-      if ($version -match 'version "(\d+)' -and [int]$Matches[1] -ge 25) { $Java = $candidate; break }
+      $version = Invoke-Program $candidate @('-version')
+      if (($version.Err + $version.Out) -match 'version "(\d+)' -and [int]$Matches[1] -ge 25) { $Java = $candidate; break }
     }
   }
   if (-not $Java -and $Launcher) {
     try {
-      $runtime = (& $Launcher --json java install 25 2>$null | Out-String) | ConvertFrom-Json
+      $runtime = (Invoke-Program $Launcher @('--json', 'java', 'install', '25')).Out | ConvertFrom-Json
       $candidate = Join-Path $runtime.home 'bin\java.exe'
       if (Test-Path $candidate) { $Java = $candidate }
     } catch { }
@@ -150,10 +176,11 @@ try {
   if ($Java) {
     Say "Recording the films' cameras (Java: $Java)"
     $films = Join-Path $Out "data\$ModId\films"
-    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'native\data\films-tool'), $Inner['1.5.2']) Films $films *> (Join-Path $Work 'films.log')
-    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the films' tables could not be made" }
-    & $Java -cp ("{0};{1}" -f (Join-Path $Src 'native\data\films-tool'), $Inner['1.4.4']) Films $films --tesseract *> (Join-Path $Work 'films.log')
-    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Work 'films.log'); Die "the Tesseract's sky table could not be made" }
+    $tool = Join-Path $Src 'native\data\films-tool'
+    $run = Invoke-Program $Java @('-cp', ("{0};{1}" -f $tool, $Inner['1.5.2']), 'Films', $films)
+    if ($run.Code -ne 0) { Write-Host $run.Err; Die "the films' tables could not be made" }
+    $run = Invoke-Program $Java @('-cp', ("{0};{1}" -f $tool, $Inner['1.4.4']), 'Films', $films, '--tesseract')
+    if ($run.Code -ne 0) { Write-Host $run.Err; Die "the Tesseract's sky table could not be made" }
   } else {
     Say 'No Java 25 found: the films (the cutscenes in space) stay off. Install Horizon Launcher, or Java 25, and run this again.'
   }
@@ -177,14 +204,12 @@ try {
   # The native mod: the port's code, built into the game by the launcher.
   if ($Local) {
     Say "Building the native mod from $Src\native"
-    if (-not $NoBuild) { & $Launcher native-build (Join-Path $Src 'native') --trust-native-code }
+    if (-not $NoBuild -and (Invoke-Shown $Launcher @('native-build', (Join-Path $Src 'native'), '--trust-native-code')) -ne 0) { Die 'the build failed: see the launcher''s native/build.log' }
   } else {
     Say "Installing the native mod from github.com/$Repo"
-    & $Launcher mods add-github "https://github.com/$Repo" --trust-native-code
-    if ($LASTEXITCODE -ne 0) { Die 'the launcher could not install the native mod' }
-    if (-not $NoBuild) { & $Launcher native-build --trust-native-code }
+    if ((Invoke-Shown $Launcher @('mods', 'add-github', "https://github.com/$Repo", '--trust-native-code')) -ne 0) { Die 'the launcher could not install the native mod' }
+    if (-not $NoBuild -and (Invoke-Shown $Launcher @('native-build', '--trust-native-code')) -ne 0) { Die 'the build failed: see the launcher''s native/build.log' }
   }
-  if ($LASTEXITCODE -ne 0) { Die 'the build failed: see the launcher''s native/build.log' }
   Say 'Done. Open Horizon Launcher and press Play: the Stellar Remote is in the creative menu.'
 } finally {
   Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue

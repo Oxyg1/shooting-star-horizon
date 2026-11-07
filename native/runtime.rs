@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz6";
+pub const VERSION: &str = "1.5.2-hz7";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -677,23 +677,40 @@ fn ear(cam: [f64; 3], target: [f64; 3], zone: f64) -> [f64; 3] {
     }
 }
 
+thread_local! {
+    /// The spell sounding now is in its film: its sounds are in the head, as the original's are then.
+    static IN_FILM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The original's `sound(...)` out in the world: its volume times 16, so it
 /// carries 256 blocks (16 times the event's own reach), loud up to the ear.
 fn play(game: &mut super::Game<'_>, name: &str, at: [f64; 3], volume: f32, pitch: f32) {
+    if IN_FILM.with(std::cell::Cell::get) {
+        ears(game, name, volume);
+        return;
+    }
     game.native_play_local_sound(&format!("shooting_star_demo:{name}"), at, volume * 16.0, pitch, 0);
 }
 
 /// The original's `cue(...)` (`ScoreCue`): volume one, so it carries as far as
 /// its own `sounds.json` entry says (256 blocks for the railgun's).
-fn cue_at(game: &mut super::Game<'_>, name: &str, at: [f64; 3]) {
+fn cue_at(game: &mut super::Game<'_>, film: bool, name: &str, at: [f64; 3]) {
+    if film {
+        ears(game, name, 1.0);
+        return;
+    }
     game.native_play_local_sound(&format!("shooting_star_demo:{name}"), at, 1.0, 1.0, 0);
 }
 
 /// The original's `ears(...)` and film sounds: heard as if inside the head,
-/// at the listener whatever the distance.
+/// wherever the camera is (the film's camera carries the listener hundreds of
+/// blocks off): a sound with no place and no fall-off, as the original's
+/// relative `Attenuation.NONE` ones.
 fn ears(game: &mut super::Game<'_>, name: &str, volume: f32) {
-    let Some(cam) = camera(game) else { return };
-    game.native_play_local_sound(&format!("shooting_star_demo:{name}"), cam, volume.min(1.0), 1.0, 0);
+    if !game.native_window() {
+        return;
+    }
+    game.audio.play(&format!("shooting_star_demo:{name}"), None, volume.clamp(0.0, 1.0), 1.0);
 }
 
 /// `sound(..., film)`: in the head during the film, out in the world else.
@@ -711,6 +728,7 @@ fn cue(game: &mut super::Game<'_>, spell: &mut ClientSpell, t: i32, now: u64) {
     let Some(cam) = camera(game) else { return };
     let start = spell.start;
     let film = film_on(spell);
+    IN_FILM.with(|f| f.set(film));
     let zone = zone_of(&start);
     let edge = if film { cam } else { ear(cam, start.target, zone) };
     let caster = start.origin;
@@ -719,21 +737,21 @@ fn cue(game: &mut super::Game<'_>, spell: &mut ClientSpell, t: i32, now: u64) {
     match start.skill {
         Skill::ShootingStar => {
             match t {
-                0 => cue_at(game, "star_rg_arm", caster),
-                7 => cue_at(game, "star_rg_press", caster),
+                0 => cue_at(game, film, "star_rg_arm", caster),
+                7 => cue_at(game, film, "star_rg_press", caster),
                 9 if film => ears(game, "star_lock", 1.0),
-                9 => cue_at(game, "star_lock", edge),
+                9 => cue_at(game, film, "star_lock", edge),
                 29 if !film => play(game, "star_countdown", edge, 1.0, 1.0),
                 44 if film => ears(game, "star_ascent", 1.0),
                 238 if film => ears(game, "star_gun", 1.0),
                 314 if film => ears(game, "star_fire", 1.0),
                 352 => {
                     if film { ears(game, "star_impact", 1.0) } else { play(game, "star_impact", edge, 1.0, 1.0) }
-                    cue_at(game, "star_beam", edge);
+                    cue_at(game, film, "star_beam", edge);
                     jolt(edge, 1.0, 700.0, now);
                 }
-                462 => cue_at(game, "star_rg_collapse", edge),
-                490 => cue_at(game, "star_rg_after", edge),
+                462 => cue_at(game, film, "star_rg_collapse", edge),
+                490 => cue_at(game, film, "star_rg_after", edge),
                 _ => {}
             }
             if t > 312 && t < 352 && t % 4 == 0 {
