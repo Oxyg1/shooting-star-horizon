@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz11";
+pub const VERSION: &str = "1.5.2-hz12";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -1045,15 +1045,16 @@ fn pull(game: &mut super::Game<'_>, spell: &ClientSpell) {
         return;
     }
     let Some(player) = game.native_player() else { return };
-    let radius = sk::eh_radius(spell.start.power);
     let hole = sk::eh_hole(spell.start.target, spell.start.power, f64::from(spell.age));
     let d = [hole[0] - player.x, hole[1] - (player.y + 1.0), hole[2] - player.z];
     let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-    let reach = radius * 3.0;
+    let reach = sk::eh_pull(spell.start.power);
+    let hunger = 0.4 + 0.6 * sk::eh_eaten(f64::from(spell.age)) as f64;
     if n < 1.0 || n > reach {
         return;
     }
-    let k = (0.02 + 0.16 * (1.0 - n / reach).powi(2)) * if spell.age >= sk::EH_FEED { 1.0 } else { 0.4 };
+    // Gentle at the edge of its reach, past running away from close in.
+    let k = (0.025 + 0.42 * (1.0 - n / reach).powi(2)) * hunger * if spell.age >= sk::EH_FEED { 1.0 } else { 0.5 };
     game.native_push_player([(d[0] / n * k) as f32, (d[1] / n * k + 0.02) as f32, (d[2] / n * k) as f32]);
 }
 

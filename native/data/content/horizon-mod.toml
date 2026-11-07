@@ -1,8 +1,10 @@
 id = "shooting_star_demo"
 name = "The Shooting Star (Demo) — Horizon port"
-version = "1.5.2-hz11"
-description = "A demo of the Stellar Remote: SS-01 The Shooting Star, SS-03 Gungnir, SS-04 Seven Stars, SS-05 Tesseract and SS-06 Gravitia. Original mod by rimuru.dev; Horizon port."
+version = "1.5.2-hz12"
+description = "A demo of the Stellar Remote: SS-01 The Shooting Star, SS-03 Gungnir, SS-04 Seven Stars, SS-05 Tesseract and SS-06 Gravitia; and the port's own SS-H1 Event Horizon and SS-H2 Supernova. Original mod by rimuru.dev; Horizon port."
 authors = ["rimuru.dev", "Horizon port"]
 api = "0.2"
 side = "both"
 capabilities = ["registries"]
+# The port's own sounds live in a namespace of their own.
+namespaces = ["ss_port"]

@@ -149,7 +149,7 @@ pub fn ready(game_dir: &Path) -> bool {
 }
 
 /// The version of the port's own content files (`assets/ss_port/version.txt`).
-const OWN_VERSION: &str = "hz11";
+const OWN_VERSION: &str = "hz12";
 
 /// Its films' tables are there.
 pub fn films_ready(game_dir: &Path) -> bool {

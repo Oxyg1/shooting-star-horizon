@@ -592,6 +592,12 @@ pub fn eh_radius(power: f32) -> f64 {
     (14.0 * f64::from(power).sqrt()).clamp(6.0, 48.0)
 }
 
+/// How far the hole pulls: everything loose, the living and the ground's
+/// top within it, harder the nearer and the more it has eaten.
+pub fn eh_pull(power: f32) -> f64 {
+    eh_radius(power) * 6.0 + 48.0
+}
+
 /// Where the hole sits once it has settled: a quarter of its sphere over the ground.
 pub fn eh_center(target: [f64; 3], power: f32) -> [f64; 3] {
     [target[0], target[1] + eh_radius(power) * 0.25, target[2]]

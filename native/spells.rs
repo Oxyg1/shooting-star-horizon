@@ -1576,18 +1576,29 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
         let Kind::Hole(state) = &spell.kind else { return };
         let r = radius * sk::eh_eaten(f64::from(t) + 12.0);
         let count = (2.0 + radius / 12.0) as u64;
+        // Out past the sphere too: the ground's top torn off and dragged in,
+        // more and further out as it feeds.
+        let far = (sk::eh_pull(spell.tune.power) * 0.55).max(radius + 4.0);
+        let wide = (3.0 + radius / 5.0) as u64 * u64::from(t >= sk::EH_FEED);
         let mut picks = Vec::new();
-        for k in 0..count {
+        let mut torn = Vec::new();
+        for k in 0..count + wide {
             let a = sk::hash(spell.seed, i64::from(t), k as i64) * std::f64::consts::TAU;
-            let d = r * (0.75 + 0.3 * sk::hash(spell.seed, k as i64, i64::from(t) * 3 + 1)) + 1.5;
+            let roll = sk::hash(spell.seed, k as i64, i64::from(t) * 3 + 1);
+            let outer = k >= count;
+            let d = if outer { r + 1.0 + (far - r - 1.0) * roll * roll } else { r * (0.75 + 0.3 * roll) + 1.5 };
             let x = (centre[0] + a.cos() * d).floor() as i32;
             let z = (centre[2] + a.sin() * d).floor() as i32;
-            if let Some(&ground) = state.ground.get(&(x, z))
+            if outer {
+                picks.push((x, z));
+                torn.push(picks.len() - 1);
+            } else if let Some(&ground) = state.ground.get(&(x, z))
                 && (f64::from(ground) - centre[1]).abs() <= radius
             {
                 picks.push((x, z));
             }
         }
+        let mut lifted = Edit::default();
         // The top block of each, as the server has it.
         // No debris from land that stays whole.
         let read = if picks.is_empty() || !spell.terrain {
@@ -1600,8 +1611,11 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
                 let (Some(Some(top)), Some(&index)) = (read.bases.get(i), read.blocks.get(i)) else { continue };
                 let Some(name) = read.palette.get(usize::from(index)) else { continue };
                 let block = name.split('[').next().unwrap_or("");
-                if block.is_empty() || is_air(block) || block.contains("water") || block.contains("lava") {
+                if block.is_empty() || is_air(block) || block.contains("water") || block.contains("lava") || block.contains("bedrock") {
                     continue;
+                }
+                if torn.contains(&i) {
+                    lifted.column(x, z, *top, 1, AIR);
                 }
                 // Out and round: the spiral's way, and up off the ground.
                 let (ox, oz) = (centre[0] - f64::from(x), centre[2] - f64::from(z));
@@ -1619,22 +1633,31 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
                 ));
             }
         }
+        apply(game, &dim, &lifted);
     }
     if (sk::EH_LAND..sk::EH_FLASH).contains(&t) {
-        let pull = radius * 3.0;
+        let pull = sk::eh_pull(spell.tune.power);
+        let hunger = 0.4 + 0.6 * sk::eh_eaten(f64::from(t));
         let (x, y, z) = (centre[0], centre[1], centre[2]);
-        // The torn blocks swirl in, faster the nearer they get.
-        game.native_run_command(&format!(
-            "execute in {dim} positioned {x:.2} {y:.2} {z:.2} as @e[type=minecraft:falling_block,distance=..{pull:.0}] at @s facing {x:.2} {y:.2} {z:.2} run tp @s ^0.55 ^0.12 ^0.9"
-        ));
+        // Everything loose swirls in: torn blocks, items, orbs, arrows,
+        // faster the nearer it gets.
+        for (reach, step) in [(pull, 0.35), (pull * 0.5, 0.7), (pull * 0.2, 1.1)] {
+            let step = step * hunger;
+            for kind in ["minecraft:falling_block", "minecraft:item", "minecraft:experience_orb", "minecraft:tnt", "minecraft:arrow", "minecraft:trident", "minecraft:boat", "minecraft:minecart"] {
+                game.native_run_command(&format!(
+                    "execute in {dim} positioned {x:.2} {y:.2} {z:.2} as @e[type={kind},distance=..{reach:.0}] at @s facing {x:.2} {y:.2} {z:.2} run tp @s ^{:.2} ^0.08 ^{step:.2}",
+                    step * 0.6
+                ));
+            }
+        }
         let core = (radius * 0.12).max(1.5);
         game.native_run_command(&format!(
             "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type=minecraft:falling_block,distance=..{core:.1}]"
         ));
-        for kind in ["minecraft:item", "minecraft:experience_orb", "minecraft:arrow"] {
+        for kind in ["minecraft:item", "minecraft:experience_orb", "minecraft:arrow", "minecraft:tnt"] {
             game.native_run_command(&format!(
                 "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type={kind},distance=..{:.1}]",
-                (state_eaten(spell) + 1.0).max(core)
+                (state_eaten(spell) * 0.5 + 1.0).max(core)
             ));
         }
         // The living are dragged in, and what the sphere holds is taken.
@@ -1643,7 +1666,7 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
             let d = [x - mob.pos[0], y - mob.pos[1], z - mob.pos[2]];
             let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             if n < pull && n > 0.5 {
-                let k = 0.08 + 0.5 * (1.0 - n / pull).powi(2);
+                let k = (0.06 + 0.9 * (1.0 - n / pull).powi(2)) * hunger;
                 game.native_push_mob(&dim, mob.id, [d[0] / n * k - d[2] / n * k * 0.4, d[1] / n * k + 0.04, d[2] / n * k + d[0] / n * k * 0.4]);
             }
         }
