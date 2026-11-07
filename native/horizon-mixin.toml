@@ -1,6 +1,6 @@
 [mod]
 id = "shooting_star"
-version = "0.7.0"
+version = "0.8.0"
 priority = 100
 
 # Built on Nightly 2026-11-05 (66f3981), the version this computer plays.
@@ -376,5 +376,19 @@ hook_version = 1
 kind = "HEAD"
 helper = "gui_layer_pre.rs"
 bindings = [
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# The wheel over the spell menu: a tuning moves, or the next skill is picked.
+[[injection]]
+id = "screen_scroll"
+hook = "screen_mouse_scrolled_pre"
+hook_version = 1
+kind = "HEAD"
+helper = "screen_scroll.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::native_hooks::Game<'_>", value = "self" },
+  { name = "screen", ty = "&crate::game::native_hooks::NativeScreenView<'_>", value = "screen" },
+  { name = "scroll", ty = "[f64; 2]", value = "scroll" },
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]

@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz7";
+pub const VERSION: &str = "1.5.2-hz8";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
@@ -215,12 +215,16 @@ pub fn on_key(game: &mut super::Game<'_>, key: &str, pressed: bool) {
         }
         let cleared = key == "key.keyboard.backspace";
         game.native_set_mod_key(ID, skill.id(), Some(if cleared { "key.keyboard.unknown" } else { key }));
+        ui_sound(if cleared { "ws_deny" } else { "ws_bound" }, 1.0);
         let said = if cleared { "No key · right-click to set one".to_owned() } else { format!("Selected by {}", key_label(key)) };
         game.native_client_action_bar(crate::text::Text::literal(said), true);
         return;
     }
     let menu = menu_open(game);
     if !menu && !game.native_playing() {
+        return;
+    }
+    if menu && menu_key(game, key) {
         return;
     }
     if mod_key(game, "skill_menu") == key {
@@ -459,6 +463,7 @@ pub fn assets_ok() -> bool {
 /// recharges count down and every spell's timeline moves on.
 pub fn client_tick(game: &mut super::Game<'_>) {
     load(game);
+    play_ui_sounds(game);
     load_assets(game);
     let now = TICKS.with(|t| {
         t.set(t.get() + 1);
@@ -942,32 +947,215 @@ pub fn toggle_menu(game: &mut super::Game<'_>) {
     }
 }
 
-fn menu_panel(width: f32, height: f32) -> [f32; 4] {
-    let w = 300.0_f32.min(width - 16.0);
-    let h = 236.0_f32.min(height - 16.0);
-    [((width - w) / 2.0).floor(), ((height - h) / 2.0).floor(), w, h]
+// The menu is laid out once per frame from the screen's size: the same
+// rectangles draw it and take its clicks.
+
+/// One of the three tunings the menu sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Knob {
+    Power,
+    Damage,
+    Speed,
 }
 
-fn menu_row(panel: [f32; 4], index: u8) -> [f32; 4] {
-    let row_h = 22.0;
-    let top = panel[1] + 36.0;
-    [panel[0] + 10.0, top + f32::from(index) * row_h, panel[2] - 20.0, row_h - 3.0]
+const KNOBS: [Knob; 3] = [Knob::Power, Knob::Damage, Knob::Speed];
+
+/// What a point of the menu is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spot {
+    Skill(u8),
+    Down(Knob),
+    Up(Knob),
+    Row(Knob),
+    Key,
+    Films,
+    Reset,
 }
 
-fn menu_hover(panel: [f32; 4], mouse: [f32; 2]) -> Option<u8> {
-    Skill::ALL.iter().map(|skill| skill.index()).find(|index| {
-        let [x, y, w, h] = menu_row(panel, *index);
-        mouse[0] >= x && mouse[0] <= x + w && mouse[1] >= y && mouse[1] <= y + h
-    })
+struct Menu {
+    panel: [f32; 4],
+    list: [[f32; 4]; 5],
+    banner: [f32; 4],
+    text_y: f32,
+    rows: [[f32; 4]; 3],
+    down: [[f32; 4]; 3],
+    up: [[f32; 4]; 3],
+    key: [f32; 4],
+    films: [f32; 4],
+    reset: [f32; 4],
 }
 
-fn recharge_text(skill: Skill) -> (String, bool) {
+fn layout(width: f32, height: f32) -> Menu {
+    let pw = 440.0_f32.min(width - 12.0).max(260.0);
+    let ph = 272.0_f32.min(height - 12.0).max(200.0);
+    let (x, y) = (((width - pw) / 2.0).floor(), ((height - ph) / 2.0).floor());
+    let top = y + 26.0;
+    let list_w = (pw * 0.36).floor();
+    let row_h = ((ph - 26.0 - 22.0) / 5.0).min(42.0).floor();
+    let mut list = [[0.0; 4]; 5];
+    for (i, row) in list.iter_mut().enumerate() {
+        *row = [x + 8.0, top + i as f32 * row_h, list_w, row_h - 4.0];
+    }
+    let rx = x + 8.0 + list_w + 8.0;
+    let rw = x + pw - 8.0 - rx;
+    // The picture takes what the words, tunings and buttons leave.
+    let banner_h = (rw / 2.0).min(92.0).min(ph - 150.0).max(30.0).floor();
+    let banner = [rx, top, rw, banner_h];
+    let text_y = top + banner_h + 4.0;
+    let rows_y = text_y + 34.0;
+    let mut rows = [[0.0; 4]; 3];
+    let mut down = [[0.0; 4]; 3];
+    let mut up = [[0.0; 4]; 3];
+    for i in 0..3 {
+        let ry = rows_y + i as f32 * 17.0;
+        rows[i] = [rx, ry, rw, 15.0];
+        down[i] = [rx + rw - 34.0, ry + 1.0, 15.0, 13.0];
+        up[i] = [rx + rw - 16.0, ry + 1.0, 15.0, 13.0];
+    }
+    let by = rows_y + 3.0 * 17.0 + 4.0;
+    let bw = ((rw - 8.0) / 3.0).floor();
+    // As tall as what is in it, with the hint's line under it.
+    let fit = (top + 5.0 * row_h).max(by + 15.0) + 20.0 - y;
+    Menu {
+        panel: [x, y, pw, ph.min(fit).floor()],
+        list,
+        banner,
+        text_y,
+        rows,
+        down,
+        up,
+        key: [rx, by, bw, 15.0],
+        films: [rx + bw + 4.0, by, bw, 15.0],
+        reset: [rx + 2.0 * (bw + 4.0), by, bw, 15.0],
+    }
+}
+
+fn inside(r: [f32; 4], p: [f32; 2]) -> bool {
+    p[0] >= r[0] && p[0] < r[0] + r[2] && p[1] >= r[1] && p[1] < r[1] + r[3]
+}
+
+impl Menu {
+    fn spot(&self, p: [f32; 2]) -> Option<Spot> {
+        if let Some(i) = self.list.iter().position(|r| inside(*r, p)) {
+            return Some(Spot::Skill(i as u8));
+        }
+        for (i, knob) in KNOBS.iter().enumerate() {
+            if inside(self.down[i], p) {
+                return Some(Spot::Down(*knob));
+            }
+            if inside(self.up[i], p) {
+                return Some(Spot::Up(*knob));
+            }
+            if inside(self.rows[i], p) {
+                return Some(Spot::Row(*knob));
+            }
+        }
+        [(self.key, Spot::Key), (self.films, Spot::Films), (self.reset, Spot::Reset)].into_iter().find(|(r, _)| inside(*r, p)).map(|(_, s)| s)
+    }
+}
+
+/// A tuning moved one notch (`dir` 1 up, -1 down) and kept.
+fn nudge(game: &super::Game<'_>, skill: Skill, knob: Knob, dir: i32) {
+    let mut t = tune(skill);
+    match knob {
+        Knob::Power if skill.power().min < skill.power().max => t.power = skill.power().step(t.power, dir),
+        Knob::Power => return,
+        Knob::Speed => t.speed = sk::SPEED.step(t.speed, dir),
+        Knob::Damage => {
+            let at = (sk::damage_step(t.damage) as i32 + dir).clamp(0, sk::DAMAGE_STEPS.len() as i32 - 1);
+            t.damage = sk::DAMAGE_STEPS[at as usize];
+        }
+    }
+    if t != tune(skill) {
+        set_tune(skill, t);
+        save(game);
+        ui_sound("ws_bind", 1.0 + 0.04 * dir as f32);
+    }
+}
+
+thread_local! {
+    /// The menu's own clicks and chimes, played on the next tick (a screen's hooks only look).
+    static UI_SOUNDS: std::cell::RefCell<Vec<(&'static str, f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The menu spot under the pointer last frame, for its hover tick.
+    static HOVERED: std::cell::Cell<Option<Spot>> = const { std::cell::Cell::new(None) };
+}
+
+fn ui_sound(name: &'static str, pitch: f32) {
+    UI_SOUNDS.with(|s| s.borrow_mut().push((name, pitch)));
+}
+
+/// The menu's queued chimes, in the head.
+fn play_ui_sounds(game: &mut super::Game<'_>) {
+    for (name, pitch) in UI_SOUNDS.with(|s| std::mem::take(&mut *s.borrow_mut())) {
+        game.audio.play(&format!("shooting_star_demo:{name}"), None, 0.6, pitch);
+    }
+}
+
+fn recharge(skill: Skill) -> (u32, u32) {
     let (left, total) = COOLDOWNS.with(|c| c.borrow()[skill.index() as usize]);
-    if left > 0 {
-        (format!("{}s left", left.div_ceil(20)), true)
-    } else {
-        let total = if total > 1 { total } else { skill.cooldown() as u32 };
-        (format!("Ready · Recharge {}s", total.div_ceil(20)), false)
+    (left, if total > 1 { total } else { skill.cooldown() as u32 })
+}
+
+fn banner_sprite(skill: Skill) -> &'static str {
+    match skill {
+        Skill::ShootingStar => "shooting_star_demo:gui/sprites/skill/stellar_remote/the_shooting_star",
+        Skill::Gungnir => "shooting_star_demo:gui/sprites/skill/stellar_remote/gungnir",
+        Skill::SevenStars => "shooting_star_demo:gui/sprites/skill/stellar_remote/seven_stars",
+        Skill::Tesseract => "shooting_star_demo:gui/sprites/skill/stellar_remote/tesseract",
+        Skill::Gravitia => "shooting_star_demo:gui/sprites/skill/stellar_remote/gravitia",
+    }
+}
+
+fn argb_of(rgb: u32, alpha: u32) -> u32 {
+    (alpha << 24) | (rgb & 0xFF_FFFF)
+}
+
+fn rgba_of(argb: u32) -> u32 {
+    let [a, r, g, b] = argb.to_be_bytes();
+    crate::hud::rgba(r, g, b, a)
+}
+
+/// A frame of one pixel round a rectangle.
+fn outline(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, r: [f32; 4], argb: u32) {
+    let c = rgba_of(argb);
+    batch.fill(atlas, r[0], r[1], r[2], 1.0, c);
+    batch.fill(atlas, r[0], r[1] + r[3] - 1.0, r[2], 1.0, c);
+    batch.fill(atlas, r[0], r[1], 1.0, r[3], c);
+    batch.fill(atlas, r[0] + r[2] - 1.0, r[1], 1.0, r[3], c);
+}
+
+fn button(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, r: [f32; 4], label: &str, accent: u32, hot: bool, off: bool) {
+    let bg = if off { 0xC0181820 } else if hot { argb_of(accent, 0x60) } else { 0xC0202032 };
+    batch.fill(atlas, r[0], r[1], r[2], r[3], rgba_of(bg));
+    outline(batch, atlas, r, if off { 0xFF303040 } else if hot { argb_of(accent, 0xFF) } else { 0xFF4A4A66 });
+    let w = crate::hud::HudBatch::text_width(atlas, label);
+    let color = if off { 0xFF5A5A6A } else { 0xFFFFFFFF };
+    batch.text(atlas, label, (r[0] + (r[2] - w) / 2.0).floor(), r[1] + ((r[3] - 8.0) / 2.0).floor(), color, false);
+}
+
+/// Words cut to lines no wider than `width` GUI pixels.
+fn wrap_px(atlas: &crate::hud::HudAtlas, text: &str, width: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let tried = if line.is_empty() { word.to_owned() } else { format!("{line} {word}") };
+        if !line.is_empty() && crate::hud::HudBatch::text_width(atlas, &tried) > width {
+            out.push(std::mem::replace(&mut line, word.to_owned()));
+        } else {
+            line = tried;
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+fn knob_text(skill: Skill, knob: Knob, t: &Tuning) -> (&'static str, String, u32) {
+    match knob {
+        Knob::Power => ("Power", skill.tune_line(t.power), 0xFFFFD470),
+        Knob::Damage => ("Damage", if t.damage.is_infinite() { "True Erasure".to_owned() } else { format!("{:.0} ({:.1} hearts)", t.damage, t.damage / 2.0) }, 0xFFFF9A7A),
+        Knob::Speed => ("Speed", format!("{:.2}x", t.speed), 0xFF9AD8FF),
     }
 }
 
@@ -977,62 +1165,121 @@ pub fn menu_render(game: &super::Game<'_>, batch: &mut crate::hud::HudBatch, scr
         return;
     }
     let atlas = &game.gui.atlas;
-    let panel = menu_panel(batch.width, batch.height);
-    let [x, y, w, h] = panel;
-    batch.fill(atlas, x, y, w, h, crate::hud::rgba(8, 8, 16, 235));
-    batch.fill(atlas, x, y, w, 2.0, crate::hud::rgba(255, 50, 72, 255));
-    batch.fill(atlas, x, y + h - 2.0, w, 2.0, crate::hud::rgba(255, 50, 72, 255));
-    batch.text(atlas, "The Shooting Star", x + 10.0, y + 8.0, 0xFFFF3248, true);
-    batch.text(atlas, &format!("Stellar Remote · {} skills · {VERSION}", Skill::ALL.len()), x + 10.0, y + 20.0, 0xFF9A9A9A, false);
+    let m = layout(batch.width, batch.height);
+    let [x, y, w, h] = m.panel;
     let chosen = selected();
-    let hovered = menu_hover(panel, screen.mouse);
+    let accent = chosen.color();
+    let hot = m.spot(screen.mouse);
+    if hot != HOVERED.with(|h| h.replace(hot)) && hot.is_some() {
+        ui_sound("ws_hover", 1.0);
+    }
+    // The panel, edged in the chosen skill's colour.
+    batch.fill(atlas, 0.0, 0.0, batch.width, batch.height, crate::hud::rgba(0, 0, 0, 110));
+    batch.fill(atlas, x, y, w, h, crate::hud::rgba(10, 10, 18, 238));
+    outline(batch, atlas, m.panel, argb_of(accent, 0x90));
+    batch.fill(atlas, x, y, w, 2.0, rgba_of(argb_of(accent, 0xFF)));
+    batch.text(atlas, "✦ STELLAR REMOTE", x + 8.0, y + 9.0, argb_of(accent, 0xFF), true);
+    let version = format!("The Shooting Star {VERSION}");
+    let vw = crate::hud::HudBatch::text_width(atlas, &version);
+    batch.text(atlas, &version, x + w - vw - 8.0, y + 9.0, 0xFF6A6A80, false);
+
+    // The skills, each a card: its picture, name, key and recharge.
     for skill in Skill::ALL {
-        let index = skill.index();
-        let [rx, ry, rw, _] = menu_row(panel, index);
-        if skill == chosen {
-            batch.fill(atlas, rx, ry, rw, 19.0, crate::hud::rgba(70, 20, 30, 220));
-        } else if hovered == Some(index) {
-            batch.fill(atlas, rx, ry, rw, 19.0, crate::hud::rgba(40, 40, 60, 200));
+        let i = skill.index();
+        let r = m.list[i as usize];
+        let on = skill == chosen;
+        let over = hot == Some(Spot::Skill(i));
+        let color = skill.color();
+        batch.fill(atlas, r[0], r[1], r[2], r[3], rgba_of(if on { argb_of(color, 0x38) } else if over { 0x60282840 } else { 0x40181826 }));
+        if on {
+            outline(batch, atlas, r, argb_of(color, 0xFF));
+            batch.fill(atlas, r[0], r[1], 2.0, r[3], rgba_of(argb_of(color, 0xFF)));
         }
-        let color = 0xFF00_0000 | skill.color();
-        batch.text(atlas, skill.title(), rx + 6.0, ry + 3.0, color, true);
-        let (state, waiting) = recharge_text(skill);
-        let width = crate::hud::HudBatch::text_width(atlas, &state);
-        batch.text(atlas, &state, rx + rw - width - 6.0, ry + 3.0, if waiting { 0xFF9A9A9A } else { 0xFF7CFF8A }, false);
+        let th = r[3] - 4.0;
+        let thumb = [r[0] + 4.0, r[1] + 2.0, (th * 2.0).floor(), th];
+        if !game.native_sprite(batch, banner_sprite(skill), [0.0, 0.0, 256.0, 128.0], thumb) {
+            batch.fill(atlas, thumb[0], thumb[1], thumb[2], thumb[3], rgba_of(argb_of(color, 0x60)));
+        }
+        let tx = thumb[0] + thumb[2] + 5.0;
+        batch.text(atlas, skill.title(), tx, r[1] + 3.0, argb_of(color, 0xFF), true);
         let label = key_label(&skill_key(game, skill));
-        let key_text = if label == "No key" { "No key · right-click to set one".to_owned() } else { format!("Selected by {label}") };
-        batch.text(atlas, &key_text, rx + 6.0, ry + 11.0, if label == "No key" { 0xFF8A8A8A } else { 0xFF9AD8FF }, false);
+        let waiting = BINDING.with(std::cell::Cell::get) == Some(i);
+        let key_line = if waiting { "press a key…".to_owned() } else if label == "No key" { "no key".to_owned() } else { format!("key {label}") };
+        batch.text(atlas, &key_line, tx, r[1] + 13.0, if waiting { 0xFFFFE070 } else { 0xFF8A9AB8 }, false);
+        // The recharge bar.
+        let (left, total) = recharge(skill);
+        let bar = [tx, r[1] + r[3] - 6.0, r[0] + r[2] - tx - 5.0, 2.0];
+        batch.fill(atlas, bar[0], bar[1], bar[2], bar[3], crate::hud::rgba(40, 40, 56, 255));
+        let ready = 1.0 - left as f32 / total.max(1) as f32;
+        batch.fill(atlas, bar[0], bar[1], (bar[2] * ready).floor(), bar[3], rgba_of(if left > 0 { 0xFF8A8A9A } else { 0xFF7CFF8A }));
+        if left > 0 {
+            let s = format!("{}s", left.div_ceil(20));
+            let sw = crate::hud::HudBatch::text_width(atlas, &s);
+            batch.text(atlas, &s, r[0] + r[2] - sw - 5.0, r[1] + 13.0, 0xFF9A9A9A, false);
+        }
     }
-    // The tuning page of the selected skill.
+
+    // The chosen skill: its picture, its words and its tuning.
+    let b = m.banner;
+    if !game.native_sprite(batch, banner_sprite(chosen), [0.0, 0.0, 256.0, 128.0], b) {
+        batch.fill(atlas, b[0], b[1], b[2], b[3], rgba_of(argb_of(accent, 0x40)));
+    }
+    outline(batch, atlas, b, argb_of(accent, 0xA0));
+    batch.fill(atlas, b[0], b[1] + b[3] - 14.0, b[2], 14.0, crate::hud::rgba(0, 0, 0, 150));
+    batch.text(atlas, chosen.title(), b[0] + 5.0, b[1] + b[3] - 11.0, 0xFFFFFFFF, true);
+    let (left, _) = recharge(chosen);
+    let state = if left > 0 { format!("recharging · {}s", left.div_ceil(20)) } else { "ready".to_owned() };
+    let sw = crate::hud::HudBatch::text_width(atlas, &state);
+    batch.text(atlas, &state, b[0] + b[2] - sw - 5.0, b[1] + b[3] - 11.0, if left > 0 { 0xFFB0B0B0 } else { 0xFF7CFF8A }, true);
+    let mut ty = m.text_y;
+    let (words, color) = if chosen.warning().is_empty() { (chosen.description(), 0xFFB8B8C8) } else { (chosen.warning(), 0xFFFF6A6A) };
+    for line in wrap_px(atlas, words, b[2]).into_iter().take(3) {
+        batch.text(atlas, &line, b[0], ty, color, false);
+        ty += 10.0;
+    }
     let t = tune(chosen);
-    let mut line_y = menu_row(panel, 5)[1] + 4.0;
-    let lines = [
-        (format!("Power [N]: {}", chosen.tune_line(t.power)), 0xFFFFD470),
-        (format!("Damage [Z]: {}", damage_line(t.damage)), 0xFFFF9A7A),
-        (format!("Speed [M]: {:.2}x", t.speed), 0xFF9AD8FF),
-        (
-            format!("Cutscenes [{}]: {}", key_label(&mod_key(game, "cutscenes")), if CUTSCENES.with(std::cell::Cell::get) { "On" } else { "Off" }),
-            0xFFB0B0B0,
-        ),
-    ];
-    for (text, color) in lines.iter() {
-        batch.text(atlas, text, x + 10.0, line_y, *color, false);
-        line_y += 10.0;
-    }
-    if !chosen.warning().is_empty() {
-        for chunk in wrap(chosen.warning(), 58) {
-            batch.text(atlas, &chunk, x + 10.0, line_y, 0xFFFF6060, false);
-            line_y += 10.0;
+    for (i, knob) in KNOBS.iter().enumerate() {
+        let r = m.rows[i];
+        if hot == Some(Spot::Row(*knob)) || hot == Some(Spot::Down(*knob)) || hot == Some(Spot::Up(*knob)) {
+            batch.fill(atlas, r[0], r[1], r[2], r[3], crate::hud::rgba(255, 255, 255, 14));
         }
-    }
-    let hint = match BINDING.with(std::cell::Cell::get) {
-        Some(index) => {
-            let name = Skill::by_index(index).map_or("the spell", |s| s.title());
-            format!("Press a key for {name} · Backspace clears it · Esc cancels")
+        let (name, value, c) = knob_text(chosen, *knob, &t);
+        batch.text(atlas, name, r[0] + 3.0, r[1] + 4.0, c, false);
+        let room = m.down[i][0] - (r[0] + 52.0) - 4.0;
+        let mut shown = value.clone();
+        while crate::hud::HudBatch::text_width(atlas, &shown) > room && shown.chars().count() > 4 {
+            shown.pop();
         }
-        None => "Click a skill to select it · Right-click to set its key · Shift+N/M/Z: down".to_owned(),
+        if shown != value {
+            shown.push('…');
+        }
+        batch.text(atlas, &shown, r[0] + 52.0, r[1] + 4.0, 0xFFE8E8F0, false);
+        let fixed = *knob == Knob::Power && chosen.power().min >= chosen.power().max;
+        button(batch, atlas, m.down[i], "-", accent, hot == Some(Spot::Down(*knob)), fixed);
+        button(batch, atlas, m.up[i], "+", accent, hot == Some(Spot::Up(*knob)), fixed);
+    }
+    let key = key_label(&skill_key(game, chosen));
+    let binding = BINDING.with(std::cell::Cell::get) == Some(chosen.index());
+    button(batch, atlas, m.key, &if binding { "Press a key…".to_owned() } else { format!("Key: {key}") }, accent, hot == Some(Spot::Key) || binding, false);
+    let films = CUTSCENES.with(std::cell::Cell::get);
+    button(batch, atlas, m.films, if films { "Cutscenes: On" } else { "Cutscenes: Off" }, accent, hot == Some(Spot::Films), false);
+    button(batch, atlas, m.reset, "Reset", accent, hot == Some(Spot::Reset), false);
+
+    // What the pointer is over, said at the bottom.
+    let hint = if binding {
+        "Press a key for this skill · Backspace: no key · Esc: cancel".to_owned()
+    } else {
+        match hot {
+            Some(Spot::Skill(_)) => "Click: choose · Right-click: set its key · Wheel: next / previous".to_owned(),
+            Some(Spot::Down(_) | Spot::Up(_) | Spot::Row(_)) => "Click - / + or turn the wheel over the row · Shift: five notches".to_owned(),
+            Some(Spot::Key) => "Click, then press the key that picks this skill".to_owned(),
+            Some(Spot::Films) => "The cutscenes in space; the cutscene key skips one".to_owned(),
+            Some(Spot::Reset) => "Power, damage and speed back to the original's".to_owned(),
+            None => format!("↑↓ choose · ←→ power · {} closes", key_label(&mod_key(game, "skill_menu"))),
+        }
     };
-    batch.text(atlas, &hint, x + 10.0, y + h - 12.0, 0xFF7A7A7A, false);
+    let hw = crate::hud::HudBatch::text_width(atlas, &hint);
+    batch.text(atlas, &hint, (x + (w - hw) / 2.0).floor(), y + h - 12.0, 0xFF7A7A90, false);
 }
 
 /// The `screen_mouse_button_pressed_pre` hook: a click on the spell menu.
@@ -1041,18 +1288,69 @@ pub fn menu_click(game: &super::Game<'_>, screen: &super::NativeScreenView<'_>, 
         return;
     }
     *canceled = true;
-    let panel = menu_panel(screen.rect[2], screen.rect[3]);
-    let Some(index) = menu_hover(panel, screen.mouse) else {
-        return;
-    };
-    if button == 1 {
-        BINDING.with(|b| b.set(Some(index)));
-        return;
-    }
-    if button == 0 {
+    let m = layout(screen.rect[2], screen.rect[3]);
+    let chosen = selected();
+    let notches = if SHIFT.with(std::cell::Cell::get) { 5 } else { 1 };
+    match m.spot(screen.mouse) {
+        Some(Spot::Skill(i)) if button == 1 => {
+            BINDING.with(|b| b.set(Some(i)));
+            ui_sound("ws_info_open", 1.0);
+        }
         // The click's hook only lends the game: the pick is made next tick.
-        PENDING.with(|p| p.set(Some(index)));
+        Some(Spot::Skill(i)) => PENDING.with(|p| p.set(Some(i))),
+        Some(Spot::Down(k)) => (0..notches).for_each(|_| nudge(game, chosen, k, -1)),
+        Some(Spot::Up(k)) => (0..notches).for_each(|_| nudge(game, chosen, k, 1)),
+        Some(Spot::Row(k)) => (0..notches).for_each(|_| nudge(game, chosen, k, if button == 1 { -1 } else { 1 })),
+        Some(Spot::Key) => {
+            BINDING.with(|b| b.set(Some(chosen.index())));
+            ui_sound("ws_info_open", 1.0);
+        }
+        Some(Spot::Films) => {
+            CUTSCENES.with(|c| c.set(!c.get()));
+            save(game);
+            ui_sound("ws_bound", 1.0);
+        }
+        Some(Spot::Reset) => {
+            set_tune(chosen, Tuning::initial(chosen));
+            save(game);
+            ui_sound("ws_warp_out", 1.0);
+        }
+        None => {}
     }
+}
+
+/// The `screen_mouse_scrolled_pre` hook: the wheel over a tuning moves it,
+/// over the skills picks the next or the last.
+pub fn menu_scroll(game: &super::Game<'_>, screen: &super::NativeScreenView<'_>, scroll: [f64; 2], canceled: &mut bool) {
+    if !menu_open(game) || scroll[1] == 0.0 {
+        return;
+    }
+    *canceled = true;
+    let dir = if scroll[1] > 0.0 { 1 } else { -1 };
+    let m = layout(screen.rect[2], screen.rect[3]);
+    match m.spot(screen.mouse) {
+        Some(Spot::Down(k) | Spot::Up(k) | Spot::Row(k)) => nudge(game, selected(), k, dir),
+        Some(Spot::Skill(_)) | None => {
+            let n = Skill::ALL.len() as i32;
+            let next = (i32::from(selected().index()) - dir).rem_euclid(n);
+            PENDING.with(|p| p.set(Some(next as u8)));
+        }
+        _ => {}
+    }
+}
+
+/// Arrow keys while the menu is up: ↑↓ the skill, ←→ its power.
+fn menu_key(game: &mut super::Game<'_>, key: &str) -> bool {
+    let skill = selected();
+    let n = Skill::ALL.len() as u8;
+    match key {
+        "key.keyboard.up" => select(game, Skill::ALL[usize::from((skill.index() + n - 1) % n)]),
+        "key.keyboard.down" => select(game, skill.next()),
+        "key.keyboard.left" => nudge(game, skill, Knob::Power, -1),
+        "key.keyboard.right" => nudge(game, skill, Knob::Power, 1),
+        _ => return false,
+    }
+    true
 }
 
 /// The `tooltip` hook: the remote's page, as the original's
