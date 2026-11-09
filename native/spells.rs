@@ -1586,67 +1586,67 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
         }
     }
 
-    // The land torn into orbit: blocks of the ground about to be eaten fly
-    // up and spiral in; whatever reaches the hole is gone.
-    if (sk::EH_FEED - 10..sk::EH_FULL).contains(&t) {
+    // The land torn into orbit: from the moment it lands the ground is peeled
+    // off layer by layer, nearest first and ever wider; each block flies up and
+    // spirals in, and whatever reaches the hole is gone.
+    if (sk::EH_LAND..sk::EH_COLLAPSE).contains(&t) && spell.terrain {
         let Kind::Hole(state) = &spell.kind else { return };
-        let r = radius * sk::eh_eaten(f64::from(t) + 12.0);
-        let count = (2.0 + radius / 12.0) as u64;
-        // Out past the sphere too: the ground's top torn off and dragged in,
-        // more and further out as it feeds.
-        let far = (sk::eh_pull(spell.tune.power) * 0.55).max(radius + 4.0);
-        let wide = (3.0 + radius / 5.0) as u64 * u64::from(t >= sk::EH_FEED);
+        let pull = sk::eh_pull(spell.tune.power);
+        let prog = (f64::from(t - sk::EH_LAND) / f64::from(sk::EH_FULL - sk::EH_LAND)).clamp(0.0, 1.0);
+        let grow = prog * prog * (3.0 - 2.0 * prog);
+        // The tearing front: out to a good part of the pull, wider as it feeds.
+        let far = radius + 6.0 + (pull * 0.7 - radius - 6.0).max(0.0) * grow;
+        let near = (radius * sk::eh_eaten(f64::from(t) + 12.0)).max(2.0);
+        let count = (8.0 + radius / 2.5) * (0.4 + 0.6 * grow);
         let mut picks = Vec::new();
-        let mut torn = Vec::new();
-        for k in 0..count + wide {
+        for k in 0..count as u64 {
             let a = sk::hash(spell.seed, i64::from(t), k as i64) * std::f64::consts::TAU;
             let roll = sk::hash(spell.seed, k as i64, i64::from(t) * 3 + 1);
-            let outer = k >= count;
-            let d = if outer { r + 1.0 + (far - r - 1.0) * roll * roll } else { r * (0.75 + 0.3 * roll) + 1.5 };
-            let x = (centre[0] + a.cos() * d).floor() as i32;
-            let z = (centre[2] + a.sin() * d).floor() as i32;
-            if outer {
-                picks.push((x, z));
-                torn.push(picks.len() - 1);
-            } else if let Some(&ground) = state.ground.get(&(x, z))
-                && (f64::from(ground) - centre[1]).abs() <= radius
-            {
-                picks.push((x, z));
-            }
+            // Mostly near, some far: the ground goes first where the pull is hardest.
+            let d = near + (far - near).max(1.0) * roll * roll;
+            picks.push(((centre[0] + a.cos() * d).floor() as i32, (centre[2] + a.sin() * d).floor() as i32));
         }
         let mut lifted = Edit::default();
-        // The top block of each, as the server has it.
-        // No debris from land that stays whole.
-        let read = if picks.is_empty() || !spell.terrain {
-            None
-        } else {
-            game.native_read_columns(&dim, &picks, NativeHeightmap::MotionBlockingNoLeaves, (1, 0)).ok()
-        };
-        if let Some(read) = read {
+        const DEPTH: usize = 3;
+        let read = game.native_read_columns(&dim, &picks, NativeHeightmap::MotionBlockingNoLeaves, (DEPTH as u32, 0)).ok();
+        let _ = state;
+        if let Some(read) = read.filter(|r| r.bases.len() == picks.len() && r.blocks.len() == picks.len() * DEPTH) {
             for (i, (x, z)) in picks.iter().copied().enumerate() {
-                let (Some(Some(top)), Some(&index)) = (read.bases.get(i), read.blocks.get(i)) else { continue };
-                let Some(name) = read.palette.get(usize::from(index)) else { continue };
-                let block = name.split('[').next().unwrap_or("");
-                if block.is_empty() || is_air(block) || block.contains("water") || block.contains("lava") || block.contains("bedrock") {
-                    continue;
-                }
-                if torn.contains(&i) {
-                    lifted.column(x, z, *top, 1, AIR);
-                }
-                // Out and round: the spiral's way, and up off the ground.
+                let Some(base) = read.bases[i] else { continue };
                 let (ox, oz) = (centre[0] - f64::from(x), centre[2] - f64::from(z));
                 let n = ox.hypot(oz).max(0.1);
                 let (ix, iz) = (ox / n, oz / n);
-                let m = [ix * 0.35 - iz * 0.55, 0.75, iz * 0.35 + ix * 0.55];
-                game.native_run_command(&format!(
-                    "execute in {dim} run summon minecraft:falling_block {}.5 {} {}.5 {{BlockState:{{Name:\"{block}\"}},Time:1,DropItem:0b,CancelDrop:1b,HurtEntities:0b,Motion:[{:.3},{:.3},{:.3}]}}",
-                    x,
-                    top + 1,
-                    z,
-                    m[0],
-                    m[1],
-                    m[2]
-                ));
+                // The top block is the one under the height; take up to DEPTH, top down.
+                let mut taken = 0;
+                for row in (0..DEPTH).rev() {
+                    let y = base - 1 - (DEPTH - 1 - row) as i32;
+                    let Some(name) = read.palette.get(usize::from(read.blocks[i * DEPTH + row])) else { break };
+                    let block = name.split('[').next().unwrap_or("");
+                    if block.is_empty() || is_air(block) {
+                        continue;
+                    }
+                    if block.contains("water") || block.contains("lava") || block.contains("bedrock") || y <= spell.min_y + 1 {
+                        break;
+                    }
+                    // Deeper layers go only some of the time, so the ground thins, not drills.
+                    if taken > 0 && sk::hash(spell.seed, i64::from(x) * 7 + i64::from(t), i64::from(z) * 5 + taken) > 0.55 {
+                        break;
+                    }
+                    lifted.column(x, z, y, 1, AIR);
+                    taken += 1;
+                    // Out and round: the spiral's way, and up off the ground.
+                    let up = 0.55 + 0.35 * sk::hash(spell.seed, i64::from(y), i64::from(x) ^ i64::from(z));
+                    let m = [ix * 0.3 - iz * 0.6, up, iz * 0.3 + ix * 0.6];
+                    game.native_run_command(&format!(
+                        "execute in {dim} run summon minecraft:falling_block {}.5 {} {}.5 {{BlockState:{{Name:\"{block}\"}},Time:1,DropItem:0b,CancelDrop:1b,HurtEntities:0b,Motion:[{:.3},{:.3},{:.3}]}}",
+                        x,
+                        y + 1,
+                        z,
+                        m[0],
+                        m[1],
+                        m[2]
+                    ));
+                }
             }
         }
         apply(game, &dim, &lifted);
@@ -1700,7 +1700,7 @@ fn hole_tick(game: &mut super::Game<'_>, spell: &mut Spell, caster: Option<&supe
         hole_rim(game, spell);
         game.native_run_command(&format!(
             "execute in {dim} positioned {x:.2} {y:.2} {z:.2} run kill @e[type=minecraft:falling_block,distance=..{:.0}]",
-            radius * 3.0
+            sk::eh_pull(spell.tune.power)
         ));
     }
 }

@@ -13,7 +13,7 @@ use super::shooting_star_skills::{self as sk, Skill, Tuning};
 
 /// The mod's id: its key in `horizon-mods.txt` and its settings folder.
 pub const ID: &str = "shooting_star";
-pub const VERSION: &str = "1.5.2-hz13";
+pub const VERSION: &str = "1.5.2-hz14";
 
 /// The Stellar Remote, declared by the companion content mod of the same
 /// namespace (`shooting_star_demo`, data/shooting_star_demo/horizon/item).
